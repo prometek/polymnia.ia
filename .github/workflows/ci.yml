@@ -55,6 +55,11 @@ jobs:
           cache: npm
           cache-dependency-path: render-motor/package-lock.json
 
+      # Pin npm to the version that generated package-lock.json. Older npm
+      # mishandles esbuild 0.28's openharmony optional platform dep.
+      - name: Pin npm
+        run: npm install -g npm@11.18.0
+
       - name: Install deps
         run: npm ci
 
