@@ -37,7 +37,10 @@ def _resolve(path: str) -> str:
 
     rest = path[len("hf://") :]
     owner, repo, *sub = rest.split("/")
-    return hf_hub_download(repo_id=f"{owner}/{repo}", filename="/".join(sub))
+    # Annotate the result explicitly: huggingface_hub may be untyped in CI (not a
+    # declared dep) -> hf_hub_download returns Any there; the annotation pins it to str.
+    local_path: str = hf_hub_download(repo_id=f"{owner}/{repo}", filename="/".join(sub))
+    return local_path
 
 
 def _get_model() -> Any:
