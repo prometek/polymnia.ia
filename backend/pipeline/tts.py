@@ -20,6 +20,7 @@ import contextlib
 import os
 import sys
 import wave
+from typing import Any
 
 from layout_store import CUED_LAYOUTS
 from utils import TTS_MODEL, TTS_VOICE, print_json, read_json, synthesize
@@ -41,7 +42,7 @@ def _synthesize(text: str) -> bytes:
     return synthesize(text, response_format="wav")
 
 
-def _voice_info() -> dict:
+def _voice_info() -> dict[str, Any]:
     """Voice metadata depending on the provider (for the timing block)."""
     if TTS_PROVIDER == "f5":
         from tts_f5 import F5_MODEL, F5_REF_AUDIO
@@ -62,7 +63,7 @@ def wav_duration(path: str) -> float:
         return round(frames / float(rate), 3) if rate else 0.0
 
 
-def voiceover_scene(scene: dict, audio_dir: str) -> dict:
+def voiceover_scene(scene: dict[str, Any], audio_dir: str) -> dict[str, Any]:
     """Step 5 on ONE scene: synthesize the narration, measure duration, sync cues.
 
     Reads the script from props.narration (tool-call shape); for cued layouts
@@ -99,7 +100,7 @@ def voiceover_scene(scene: dict, audio_dir: str) -> dict:
     }
 
 
-def main():
+def main() -> None:
     if len(sys.argv) < 2:
         sys.exit("Usage: python3 tts.py scene_full.json [out/audio] > scene_audio.json")
 

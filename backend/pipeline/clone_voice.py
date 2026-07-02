@@ -18,13 +18,14 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from typing import Any, cast
 
 from utils import API_KEY
 
 VOICES_URL = "https://api.mistral.ai/v1/audio/voices"
 
 
-def clone_voice(audio_path: str, name: str, languages: list[str]) -> dict:
+def clone_voice(audio_path: str, name: str, languages: list[str]) -> dict[str, Any]:
     if not API_KEY:
         sys.exit("Error: MISTRAL_API_KEY is not set.")
     if not os.path.exists(audio_path):
@@ -53,7 +54,7 @@ def clone_voice(audio_path: str, name: str, languages: list[str]) -> dict:
 
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            return cast(dict[str, Any], json.loads(resp.read().decode("utf-8")))
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace")
         sys.exit(f"HTTP error {e.code} (clone voice): {detail}")
@@ -61,7 +62,7 @@ def clone_voice(audio_path: str, name: str, languages: list[str]) -> dict:
         sys.exit(f"Network error (clone voice): {e.reason}")
 
 
-def main():
+def main() -> None:
     if len(sys.argv) < 3:
         sys.exit('Usage: python3 clone_voice.py sample.wav "My voice" [fr]')
 

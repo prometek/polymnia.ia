@@ -12,13 +12,14 @@ Used to convert each `narration_cue` into an exact `startFrame`.
 
 import re
 import unicodedata
+from typing import Any
 
-_model = None
-_tokenizer = None
-_aligner = None
+_model: Any = None
+_tokenizer: Any = None
+_aligner: Any = None
 
 
-def _load():
+def _load() -> tuple[Any, Any, Any]:
     global _model, _tokenizer, _aligner
     if _model is None:
         import torch  # noqa: F401
@@ -41,7 +42,7 @@ def normalize_words(text: str) -> list[str]:
     return [w for w in re.split(r"[^a-z]+", text) if w]
 
 
-def word_timestamps(wav_path: str, text: str) -> list[dict]:
+def word_timestamps(wav_path: str, text: str) -> list[dict[str, Any]]:
     """Return [{word, start, end}] (seconds) aligning `text` over `wav_path`.
 
     Returns [] if alignment fails (caller can fall back to a rough estimate).
@@ -68,7 +69,7 @@ def word_timestamps(wav_path: str, text: str) -> list[dict]:
         num_frames = emission.size(1)
         sec_per_frame = (waveform.size(1) / num_frames) / 16000
 
-        out = []
+        out: list[dict[str, Any]] = []
         for word, spans in zip(words, token_spans, strict=False):
             out.append(
                 {

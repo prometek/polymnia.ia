@@ -15,6 +15,7 @@ Usage: python3 outline.py plan.json > outline.json
 
 import json
 import sys
+from typing import Any
 
 from layout_store import LAYOUT_IDS, catalog_for_prompt, choose_composition, is_valid_layout
 from utils import call_mistral, print_json, read_json
@@ -53,7 +54,7 @@ KICKER_THEMATIC_RULE = (
 KICKER_NUMBERED_LABEL = "Partie"  # numbered style: "Partie 1", "Partie 2", ...
 
 
-def build_outline(plan: dict, kicker_style: str = "thematic") -> dict:
+def build_outline(plan: dict[str, Any], kicker_style: str = "thematic") -> dict[str, Any]:
     """Stage A: split the plan into scenes and choose a component per scene.
 
     `kicker_style` controls section intertitles, CONSISTENT across the whole video:
@@ -109,7 +110,7 @@ def build_outline(plan: dict, kicker_style: str = "thematic") -> dict:
     return {"scenes": out}
 
 
-def main():
+def main() -> None:
     if len(sys.argv) < 2:
         sys.exit("Usage: python3 outline.py plan.json [brand_kit.json] > outline.json")
     plan = read_json(sys.argv[1])

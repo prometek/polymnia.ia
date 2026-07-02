@@ -12,10 +12,14 @@ startFrame is relative to the SCENE start, so we add the lead-in offset (the voi
 begins `lead_frames` after the scene starts). startFrames are forced monotonic.
 """
 
+from typing import Any
+
 from align import normalize_words
 
 
-def _frame_by_words(cue: str, words: list[dict], cursor: int, fps: int, lead: int):
+def _frame_by_words(
+    cue: str, words: list[dict[str, Any]], cursor: int, fps: int, lead: int
+) -> tuple[int | None, int]:
     """Find cue in the aligned word stream from `cursor`. Returns (frame, next_cursor)."""
     cue_tokens = normalize_words(cue)
     if not cue_tokens:
@@ -35,12 +39,12 @@ def _frame_by_position(cue: str, narration: str, audio_frames: int, lead: int) -
 
 
 def attach_start_frames(
-    props: dict,
+    props: dict[str, Any],
     audio_duration_s: float,
     fps: int,
     lead_frames: int = 0,
-    words: list[dict] | None = None,
-) -> dict:
+    words: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Inject `startFrame` on each cued step of `props` (in place, returns props).
 
     Uses forced-aligned `words` if provided, else the char-position fallback.

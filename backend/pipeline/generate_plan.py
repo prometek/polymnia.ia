@@ -12,6 +12,7 @@ Usage: python3 generate_plan.py input.txt > plan.json
 """
 
 import sys
+from typing import Any
 
 from utils import call_mistral, print_json, read_text
 
@@ -43,12 +44,12 @@ Expected schema:
 Aim for 3 to 7 sections. A single idea per section."""
 
 
-def generate_plan(source_text: str) -> dict:
+def generate_plan(source_text: str) -> dict[str, Any]:
     """Step 1: turn raw text into an educational plan."""
     return call_mistral(SYSTEM_PROMPT, source_text, temperature=0.3)
 
 
-def main():
+def main() -> None:
     if len(sys.argv) < 2:
         sys.exit("Usage: python3 generate_plan.py input.txt > plan.json")
 

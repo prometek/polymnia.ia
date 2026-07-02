@@ -1,5 +1,6 @@
-# Fast safety net (a few seconds). Type check + tests run in CI, not here.
-# Install:  uv run pre-commit install --install-hooks --hook-type commit-msg
+# Fast safety net (a few seconds), runs from the monorepo root.
+# Type check, tests and image build run in CI, not here.
+# Install:  uv run --project backend pre-commit install --install-hooks --hook-type commit-msg
 default_install_hook_types: [pre-commit, commit-msg]
 
 repos:
@@ -11,11 +12,13 @@ repos:
       - id: check-merge-conflict
       - id: check-added-large-files
         args: ["--maxkb=1024"]
-        exclude: ^inputs/voice_sample\.wav$  # TTS voice-clone sample, intentional input
+        exclude: ^backend/inputs/voice_sample\.wav$  # TTS voice-clone sample, intentional input
       - id: check-yaml
       - id: check-toml
+      - id: check-json
 
-  # Lint + format Python (auto-fix).
+  # Lint + format Python (auto-fix). Ruff discovers backend/pyproject.toml
+  # per-file; only backend/ has .py, so no path scoping needed.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.20
     hooks:
@@ -23,7 +26,7 @@ repos:
         args: ["--fix"]
       - id: ruff-format
 
-  # Secret detection.
+  # Secret detection (whole repo).
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.0
     hooks:
@@ -35,3 +38,6 @@ repos:
     hooks:
       - id: conventional-pre-commit
         stages: [commit-msg]
+
+# TODO(render-motor): no TS formatter/linter configured yet (no prettier/biome
+# in render-motor). Add a scoped format hook once a formatter + config exist.

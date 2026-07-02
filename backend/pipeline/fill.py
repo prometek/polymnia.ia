@@ -15,6 +15,7 @@ Usage: python3 fill.py outline.json [brand_kit.json] > scenes_full.json
 
 import json
 import sys
+from typing import Any
 
 from layout_store import build_tool, is_valid_layout
 from utils import available_assets, call_tool, collect_asset_refs, print_json, read_json
@@ -31,21 +32,23 @@ Rules:
 - For icon references, choose an id among those proposed (enum)."""
 
 
-def fill_scene(scene: dict, brand_kit: dict, instruction: str | None = None) -> dict:
+def fill_scene(
+    scene: dict[str, Any], brand_kit: dict[str, Any], instruction: str | None = None
+) -> dict[str, Any]:
     """Stage B on ONE scene: call the component tool -> props + asset_refs.
 
     If `instruction` is given (scoped-scene edit, US-06), the current props and the
     edit request are added to the context so the model regenerates this scene only,
     applying the change and keeping the rest faithful.
     """
-    type_id = scene.get("type")
+    type_id = scene.get("type", "")
     if not is_valid_layout(type_id):
         sys.exit(f"Error: scene order={scene.get('order')} has an invalid type '{type_id}'.")
 
     asset_ids = [a.get("id") for a in brand_kit.get("assets", []) if a.get("type") == "icon"]
     tool = build_tool(type_id, asset_ids)
 
-    context = {
+    context: dict[str, Any] = {
         "scene": {"idea": scene.get("idea"), "type": type_id},
         "brand_kit": {
             "voice": brand_kit.get("voice", {}),
@@ -70,7 +73,7 @@ def fill_scene(scene: dict, brand_kit: dict, instruction: str | None = None) -> 
     return {**scene, "props": props, "asset_refs": collect_asset_refs(props, brand_kit)}
 
 
-def main():
+def main() -> None:
     if len(sys.argv) < 2:
         sys.exit("Usage: python3 fill.py outline.json [brand_kit.json] > scenes_full.json")
 

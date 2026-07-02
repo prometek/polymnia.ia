@@ -22,13 +22,14 @@ import json
 import os
 import subprocess
 import sys
+from typing import Any
 
 from fill import fill_scene
 from tts import voiceover_scene
 from utils import collect_asset_refs, read_json
 
 
-def _set_path(obj, path: str, value: str) -> None:
+def _set_path(obj: Any, path: str, value: str) -> None:
     """Set a value by dotted path, e.g. 'items.0.text' (list indices supported)."""
     keys = path.split(".")
     for k in keys[:-1]:
@@ -40,7 +41,7 @@ def _set_path(obj, path: str, value: str) -> None:
         obj[last] = value
 
 
-def _swap_icons(node, new_ref: str) -> None:
+def _swap_icons(node: Any, new_ref: str) -> None:
     """Replace every icon_ref in the props tree with new_ref."""
     if isinstance(node, dict):
         for k, v in node.items():
@@ -53,7 +54,7 @@ def _swap_icons(node, new_ref: str) -> None:
             _swap_icons(el, new_ref)
 
 
-def _preview(scene: dict) -> str:
+def _preview(scene: dict[str, Any]) -> str:
     p = scene.get("props", {})
     items = p.get("items") or p.get("steps") or []
     return (
@@ -89,7 +90,7 @@ def render(doc_path: str, kit_path: str) -> None:
     )
 
 
-def preview(scene: dict, brand_kit: dict) -> None:
+def preview(scene: dict[str, Any], brand_kit: dict[str, Any]) -> None:
     """Render ONLY this scene to a short clip (fast iteration, no full re-render)."""
     import shutil
 
@@ -142,7 +143,7 @@ def preview(scene: dict, brand_kit: dict) -> None:
     print(f"-> scene preview: render-motor/{out}", file=sys.stderr)
 
 
-def main():
+def main() -> None:
     args = sys.argv[1:]
     do_render = "--render" in args
     do_preview = "--preview" in args
