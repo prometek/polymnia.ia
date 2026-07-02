@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import sys
+from typing import Any
 
 from utils import read_json
 
@@ -31,14 +32,14 @@ RENDER_INPUT = os.path.join(RENDER_DIR, "render-input.json")
 VALID_STYLES = {"whiteboard", "kawaii", "aquarelle", "retro", "tech"}
 
 
-def emoji_map(brand_kit: dict) -> dict:
+def emoji_map(brand_kit: dict[str, Any]) -> dict[str, Any]:
     """asset id -> emoji (for assets of type icon)."""
     return {
         a["id"]: a.get("emoji", "") for a in brand_kit.get("assets", []) if a.get("type") == "icon"
     }
 
 
-def render_cosmetic(brand_kit: dict) -> dict:
+def render_cosmetic(brand_kit: dict[str, Any]) -> dict[str, Any]:
     """Map the brand kit cosmetic to the override expected by the render.
 
     The visual style keeps its treatment/decor/motion; only the kit's colors +
@@ -64,7 +65,7 @@ def render_cosmetic(brand_kit: dict) -> dict:
     }
 
 
-def render_background(brand_kit: dict) -> dict | None:
+def render_background(brand_kit: dict[str, Any]) -> dict[str, Any] | None:
     """Prepare the kit background for the render. Copy the image if needed (baked asset).
 
     type: 'image' (file copied into public), 'gradient'/'solid' (derived from palette),
@@ -87,7 +88,7 @@ def render_background(brand_kit: dict) -> dict | None:
     return out
 
 
-def copy_logo(brand_kit: dict) -> str | None:
+def copy_logo(brand_kit: dict[str, Any]) -> str | None:
     """Copy the kit's primary logo into public/ and return its name (staticFile).
 
     Baked asset (ADR-11): the file is fixed, and so are its colors.
@@ -106,9 +107,9 @@ def copy_logo(brand_kit: dict) -> str | None:
     return name
 
 
-def resolve_content(content_data: dict, emojis: dict) -> dict:
+def resolve_content(content_data: dict[str, Any], emojis: dict[str, Any]) -> dict[str, Any]:
     """Resolve the items' icon_ref to an emoji (icon) for the render."""
-    cd = json.loads(json.dumps(content_data))  # deep copy
+    cd: dict[str, Any] = json.loads(json.dumps(content_data))  # deep copy
     for item in cd.get("items", []) or []:
         ref = item.get("icon_ref")
         if ref:
@@ -119,7 +120,7 @@ def resolve_content(content_data: dict, emojis: dict) -> dict:
     return cd
 
 
-def main():
+def main() -> None:
     if len(sys.argv) < 2:
         sys.exit("Usage: python3 pack_render.py scene_audio.json [styleId] [brand_kit.json]")
 

@@ -7,6 +7,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from typing import Any, cast
 
 from dotenv import load_dotenv
 
@@ -33,7 +34,7 @@ TTS_MODEL = "voxtral-mini-tts-2603"
 TTS_VOICE = os.getenv("MISTRAL_TTS_VOICE", "en_paul_neutral")
 
 
-def call_mistral(system_prompt: str, user_content: str, temperature: float = 0.3) -> dict:
+def call_mistral(system_prompt: str, user_content: str, temperature: float = 0.3) -> dict[str, Any]:
     """Generic Mistral API call with forced JSON output.
 
     temperature: low = stable, reproducible structure.
@@ -75,12 +76,17 @@ def call_mistral(system_prompt: str, user_content: str, temperature: float = 0.3
     # The model response is a JSON string -> parse it
     content = body["choices"][0]["message"]["content"]
     try:
-        return json.loads(content)
+        return cast(dict[str, Any], json.loads(content))
     except json.JSONDecodeError:
         sys.exit(f"The model did not return valid JSON:\n{content}")
 
 
-def call_tool(system_prompt: str, user_content: str, tool: dict, temperature: float = 0.4) -> dict:
+def call_tool(
+    system_prompt: str,
+    user_content: str,
+    tool: dict[str, Any],
+    temperature: float = 0.4,
+) -> dict[str, Any]:
     """Mistral function calling: force a call to `tool` and return its arguments.
 
     We pass a single tool + tool_choice='any' -> the model MUST call it.
@@ -128,12 +134,12 @@ def call_tool(system_prompt: str, user_content: str, tool: dict, temperature: fl
     # arguments = JSON string (standard function calling) -> parse
     arguments = tool_calls[0]["function"]["arguments"]
     try:
-        return json.loads(arguments)
+        return cast(dict[str, Any], json.loads(arguments))
     except json.JSONDecodeError:
         sys.exit(f"Tool arguments are not parsable:\n{arguments}")
 
 
-def available_assets(brand_kit: dict) -> list[dict]:
+def available_assets(brand_kit: dict[str, Any]) -> list[dict[str, Any]]:
     """Compact list of referenceable assets (id + usage hint) for prompt context."""
     return [
         {"id": a.get("id"), "type": a.get("type"), "usage": a.get("usage", "")}
@@ -141,7 +147,7 @@ def available_assets(brand_kit: dict) -> list[dict]:
     ]
 
 
-def collect_asset_refs(content: dict, brand_kit: dict) -> list[str]:
+def collect_asset_refs(content: dict[str, Any], brand_kit: dict[str, Any]) -> list[str]:
     """Extract and validate asset ids referenced in a content/props tree.
 
     Convention: any key ending with "_ref" carries an asset id; it must exist in
@@ -150,7 +156,7 @@ def collect_asset_refs(content: dict, brand_kit: dict) -> list[str]:
     valid_ids = {a.get("id") for a in brand_kit.get("assets", [])}
     refs: list[str] = []
 
-    def visit(node):
+    def visit(node: Any) -> None:
         if isinstance(node, dict):
             for key, val in node.items():
                 if key.endswith("_ref") and isinstance(val, str):
@@ -177,13 +183,13 @@ def read_text(path: str) -> str:
         return f.read()
 
 
-def read_json(path: str) -> dict:
+def read_json(path: str) -> dict[str, Any]:
     """Read a UTF-8 JSON file."""
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        return cast(dict[str, Any], json.load(f))
 
 
-def print_json(obj: dict) -> None:
+def print_json(obj: dict[str, Any]) -> None:
     """Print an object as indented JSON (chainable via stdout)."""
     print(json.dumps(obj, indent=2, ensure_ascii=False))
 

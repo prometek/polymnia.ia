@@ -70,8 +70,9 @@ Two subprojects with separate toolchains under a single git repo at the root.
   drift is a known POC debt.
 - `pipeline/` scripts import siblings (the script's own dir is on `sys.path`);
   `print()` is allowed there (stdout = chainable artefact) but forbidden in `api/`.
-- mypy strict is the target everywhere; `api/` is conform, `pipeline/`/`db.py`
-  legacy is typed over time. mypy runs in CI only (too slow for pre-commit).
+- mypy strict passes over `api/` + `pipeline/` (both conform). Keep it green —
+  mypy runs in CI (blocking), not pre-commit (too slow). Pipeline scripts wrap
+  JSON/LLM boundaries as `dict[str, Any]`.
 - Known POC debt: EN voice reading FR text (clone FR for prod); audio/render
   artefacts are regenerated, never committed.
 

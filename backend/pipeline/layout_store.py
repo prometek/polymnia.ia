@@ -16,7 +16,7 @@ content_types) absent from the TS side: these only guide the LLM, not the render
 """
 
 import copy
-from typing import TypedDict
+from typing import Any, TypedDict
 
 
 class Layout(TypedDict):
@@ -203,7 +203,7 @@ def choose_composition(layout_id: str, previous: str | None) -> str:
 # Maps layout id -> the array property whose items carry a narration_cue.
 CUED_LAYOUTS = {"steps": "steps", "bullets": "items", "stat": "stats", "diagram": "nodes"}
 
-PARAMS_SCHEMA: dict[str, dict] = {
+PARAMS_SCHEMA: dict[str, dict[str, Any]] = {
     "title": {
         "type": "object",
         "properties": {
@@ -411,7 +411,7 @@ PARAMS_SCHEMA: dict[str, dict] = {
 }
 
 
-def _inject_icon_enum(schema: dict, asset_ids: list[str]) -> None:
+def _inject_icon_enum(schema: dict[str, Any], asset_ids: list[str]) -> None:
     """Constrain any 'icon_ref' field of the schema to an enum of the kit asset ids."""
     if not isinstance(schema, dict):
         return
@@ -424,7 +424,7 @@ def _inject_icon_enum(schema: dict, asset_ids: list[str]) -> None:
         _inject_icon_enum(schema["items"], asset_ids)
 
 
-def build_tool(layout_id: str, asset_ids: list[str] | None = None) -> dict:
+def build_tool(layout_id: str, asset_ids: list[str] | None = None) -> dict[str, Any]:
     """Build the (function-calling) tool for a layout: name = layout_id,
     parameters = JSON Schema of the slots, icon_ref constrained to the kit assets."""
     layout = LAYOUTS_BY_ID.get(layout_id)

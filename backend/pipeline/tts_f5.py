@@ -15,6 +15,7 @@ import contextlib
 import os
 import sys
 import tempfile
+from typing import Any
 
 # Config (overridable via env)
 F5_MODEL = os.getenv("F5_MODEL", "F5TTS_Base")
@@ -25,7 +26,7 @@ F5_VOCAB = os.getenv("F5_VOCAB", "hf://RASPIAUDIO/F5-French-MixedSpeakers-reduce
 F5_REF_AUDIO = os.getenv("F5_REF_AUDIO", "inputs/voice_sample.wav")
 F5_REF_TEXT = os.getenv("F5_REF_TEXT", "")  # "" => auto-transcribe the ref (ASR)
 
-_model = None
+_model: Any = None
 
 
 def _resolve(path: str) -> str:
@@ -39,7 +40,7 @@ def _resolve(path: str) -> str:
     return hf_hub_download(repo_id=f"{owner}/{repo}", filename="/".join(sub))
 
 
-def _get_model():
+def _get_model() -> Any:
     """Load the model once (slow). MPS if available, otherwise CPU."""
     global _model
     if _model is None:
