@@ -1,0 +1,23 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Secrets
+.env
+
+# macOS
+.DS_Store
+
+# Artefacts pipeline (regeneres par run.sh) : out/ contient *.json + audio/
+out/
+
+# Audio sources brutes (lourdes)
+*.src.wav
+voice_src.wav

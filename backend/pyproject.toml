@@ -1,0 +1,60 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "dotenv>=0.9.9",
+    "fastapi>=0.138.2",
+    "psycopg[binary]>=3.3.4",
+    "pydantic>=2.13.4",
+    "sqlmodel>=0.0.39",
+    "uvicorn[standard]>=0.49.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "mypy>=2.1.0",
+    "pre-commit>=4.6.0",
+    "pytest>=9.1.1",
+    "ruff>=0.15.20",
+]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+# pipeline/ scripts import siblings (the script dir is on sys.path at runtime).
+src = ["api", "pipeline"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pyflakes / pycodestyle
+    "I",             # import sorting
+    "UP",            # pyupgrade
+    "B",             # bugbear
+    "SIM",           # simplify
+    "BLE",           # blind except
+    "RUF",           # ruff-specific
+]
+# print() allowed in pipeline CLI scripts (stdout is the chainable artefact);
+# forbidden in the API layer (use logging there).
+[tool.ruff.lint.per-file-ignores]
+"pipeline/*" = ["T201"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+# psycopg/urllib third-party stubs are partial; siblings resolved via runtime sys.path.
+ignore_missing_imports = true
+explicit_package_bases = true
+mypy_path = "pipeline"
+files = ["api", "pipeline"]
+
+[tool.pytest.ini_options]
+# tests/ mirrors api/ and pipeline/; pipeline scripts import siblings, so the
+# pipeline dir is on sys.path for tests just like at runtime.
+testpaths = ["tests"]
+pythonpath = ["pipeline", "api"]
+addopts = "-ra"

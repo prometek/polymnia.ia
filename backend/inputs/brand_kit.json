@@ -1,0 +1,73 @@
+{
+  "id": "cap-permis",
+  "name": "Cap Permis",
+  "tagline": "Ton cap vers le permis bateau",
+  "source": "brand-kit-permis-bateau.html (extract)",
+  "visualStyle": "tech",
+  "kicker_style": "thematic",
+
+  "cosmetic": {
+    "named_palette": {
+      "ocean_deep":   { "hex": "#0B2540", "role": "Main background / strong text" },
+      "ocean_mid":    { "hex": "#1A4A72", "role": "Secondary background / components" },
+      "signal_amber": { "hex": "#F5A623", "role": "Accent / CTA / key titles" },
+      "wake_white":   { "hex": "#F0F6FF", "role": "Text on dark background" },
+      "foam":         { "hex": "#D6E8F7", "role": "Backgrounds / separators" },
+      "muted":        { "hex": "#8AA4BE", "role": "Secondary text / labels" },
+      "nav_red":      { "hex": "#C0392B", "role": "Alert / error" }
+    },
+    "palette": {
+      "bg0": "#0B2540",
+      "bg1": "#1A4A72",
+      "accent": "#F5A623",
+      "accent2": "#D6E8F7",
+      "warn": "#C0392B",
+      "text": "#F0F6FF"
+    },
+    "fonts": {
+      "display": { "family": "Bebas Neue", "usage": "Titles, thumbnails, headers" },
+      "heading": { "family": "Inter", "weight": 600, "usage": "Subtitles" },
+      "body":    { "family": "Inter", "weight": 400, "usage": "Body text" },
+      "mono":    { "family": "Space Mono", "usage": "Labels, timestamps, data" }
+    },
+    "fontFamily": "Inter, sans-serif",
+    "weightBold": 700,
+    "background": {
+      "type": "image",
+      "file": "inputs/assets/cap-permis/waves-bg.svg",
+      "overlayDecor": true
+    }
+  },
+
+  "voice": {
+    "personality": "Pedagogue sans condescendance, complice sans etre familier, expert sans jargon inutile.",
+    "informal": true,
+    "do": [
+      "Parler directement a l'abonne, comme un ami qui s'y connait.",
+      "Vulgariser avec des analogies du quotidien.",
+      "Encourager avec de la progression concrete."
+    ],
+    "dont": [
+      "Ton academique ou distant.",
+      "Jargon nautique non explique.",
+      "Minimiser les difficultes / promettre une reussite sans effort."
+    ]
+  },
+
+  "motion": [
+    "Slow wave: 6-8s ease-in-out infinite",
+    "Fade-in cards: 0.4s cubic-bezier(.4,0,.2,1)",
+    "Logo intro: scale 0.8->1 + opacity 0->1, 0.6s",
+    "Titles: typewriter effect"
+  ],
+
+  "assets": [
+    { "id": "logo-dark",  "type": "logo", "variant": "on-dark",  "format": "svg", "file": "inputs/assets/cap-permis/logo.svg", "primary": true, "usage": "Primary (dark background)" },
+    { "id": "logo-light", "type": "logo", "variant": "on-light", "format": "svg", "usage": "Secondary (light background)" },
+    { "id": "logo-amber", "type": "logo", "variant": "on-amber", "format": "svg", "usage": "Accent (amber background)" },
+    { "id": "icon-anchor",   "type": "icon", "glyph": "anchor",   "emoji": "⚓", "usage": "Theory / rules" },
+    { "id": "icon-compass",  "type": "icon", "glyph": "compass",  "emoji": "🧭", "usage": "Navigation / heading" },
+    { "id": "icon-clipboard","type": "icon", "glyph": "clipboard","emoji": "📋", "usage": "Quiz / tests / steps" },
+    { "id": "icon-wave",     "type": "icon", "glyph": "wave",     "emoji": "🌊", "usage": "Sea / weather / safety" }
+  ]
+}

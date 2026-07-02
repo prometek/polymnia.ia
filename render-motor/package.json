@@ -1,0 +1,29 @@
+{
+  "name": "polymnia-render-poc",
+  "version": "0.1.0",
+  "description": "POC rendu Remotion headless — mesure coût/temps par minute de vidéo (décision bloquante #1)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "audio": "node scripts/gen-audio.mjs",
+    "render": "remotion render src/index.ts Main out/video.mp4",
+    "measure": "node scripts/measure.mjs",
+    "studio": "remotion studio src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.290",
+    "@remotion/google-fonts": "4.0.290",
+    "@remotion/transitions": "^4.0.290",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "remotion": "4.0.290"
+  },
+  "devDependencies": {
+    "@types/react": "19.0.0",
+    "typescript": "5.7.3",
+    "vitest": "^4.1.9"
+  }
+}

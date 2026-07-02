@@ -1,0 +1,62 @@
+{
+  "styleId": "tech",
+  "cosmetic": {
+    "palette": {
+      "bg": "#0B2540",
+      "text": "#F0F6FF",
+      "accent": "#F5A623",
+      "accent2": "#1A4A72",
+      "muted": "#8AA4BE"
+    },
+    "fontDisplay": "Bebas Neue",
+    "fontBody": "Inter",
+    "uppercase": false,
+    "background": {
+      "type": "image",
+      "overlayDecor": true,
+      "value": "waves-bg.svg"
+    }
+  },
+  "logo": "logo.svg",
+  "scenes": [
+    {
+      "type": "bullets",
+      "composition": "left",
+      "durationS": 12.16,
+      "audio": "audio/scene-4.wav",
+      "props": {
+        "items": [
+          {
+            "text": "Priorité aux navires",
+            "icon_ref": "icon-wave",
+            "narration_cue": "les règles de priorité",
+            "startFrame": 115,
+            "icon": "🌊"
+          },
+          {
+            "text": "Balises et feux",
+            "icon_ref": "icon-wave",
+            "narration_cue": "les balises et feux",
+            "startFrame": 264,
+            "icon": "🌊"
+          },
+          {
+            "text": "Signaux sonores lumineux",
+            "icon_ref": "icon-wave",
+            "narration_cue": "les signaux sonores et lumineux",
+            "startFrame": 346,
+            "icon": "🌊"
+          },
+          {
+            "text": "Règles locales zones vitesses",
+            "icon_ref": "icon-wave",
+            "narration_cue": "les règles locales",
+            "startFrame": 504,
+            "icon": "🌊"
+          }
+        ],
+        "narration": "En mer, il faut maîtriser les règles de priorité entre navires, mais aussi les balises et feux, les signaux sonores et lumineux, et bien sûr les règles locales comme les zones protégées ou les limitations de vitesse."
+      }
+    }
+  ]
+}

@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Brand Kit — Cap Permis</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --ocean-deep:   #0B2540;
+    --ocean-mid:    #1A4A72;
+    --wake-white:   #F0F6FF;
+    --signal-amber: #F5A623;
+    --nav-red:      #C0392B;
+    --foam:         #D6E8F7;
+    --ink:          #08111D;
+    --muted:        #8AA4BE;
+  }
+
+  body {
+    background: #EEF4FB;
+    font-family: 'Inter', sans-serif;
+    color: var(--ink);
+    line-height: 1.6;
+  }
+
+  /* ── LAYOUT ── */
+  .page { max-width: 960px; margin: 0 auto; padding: 48px 24px 96px; }
+
+  .section {
+    background: white;
+    border-radius: 12px;
+    padding: 48px;
+    margin-bottom: 32px;
+    border: 1px solid #D6E8F7;
+  }
+
+  .section-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 28px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .section-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--foam);
+  }
+
+  h2 {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 38px;
+    letter-spacing: .04em;
+    color: var(--ocean-deep);
+    margin-bottom: 6px;
+  }
+
+  h3 {
+    font-family: 'Inter', sans-serif;
+    font-weight: 600;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--ocean-mid);
+    margin-bottom: 16px;
+  }
+
+  /* ── HERO ── */
+  .hero {
+    background: var(--ocean-deep);
+    border-radius: 12px;
+    padding: 72px 48px 60px;
+    margin-bottom: 32px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    bottom: -40px; left: -60px;
+    width: 500px; height: 220px;
+    background: radial-gradient(ellipse, rgba(26,74,114,.6) 0%, transparent 70%);
+    border-radius: 50%;
+    animation: drift 8s ease-in-out infinite alternate;
+  }
+  .hero::after {
+    content: '';
+    position: absolute;
+    top: -30px; right: -40px;
+    width: 300px; height: 180px;
+    background: radial-gradient(ellipse, rgba(245,166,35,.12) 0%, transparent 70%);
+    border-radius: 50%;
+  }
+  @keyframes drift { from { transform: translateX(0) } to { transform: translateX(30px) } }
+
+  .hero-eyebrow {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: .22em;
+    color: var(--signal-amber);
+    text-transform: uppercase;
+    margin-bottom: 20px;
+  }
+
+  .hero-name {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: clamp(72px, 12vw, 120px);
+    color: var(--wake-white);
+    letter-spacing: .02em;
+    line-height: .92;
+    position: relative;
+    z-index: 1;
+  }
+
+  .hero-name span {
+    color: var(--signal-amber);
+  }
+
+  .hero-tagline {
+    margin-top: 24px;
+    font-size: 15px;
+    color: var(--foam);
+    font-weight: 300;
+    letter-spacing: .04em;
+    position: relative;
+    z-index: 1;
+  }
+
+  .hero-tagline strong {
+    font-weight: 600;
+    color: white;
+  }
+
+  /* ── LOGO ── */
+  .logo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 20px;
+  }
+
+  .logo-card {
+    border-radius: 8px;
+    padding: 32px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+  .logo-card.on-dark  { background: var(--ocean-deep); }
+  .logo-card.on-light { background: var(--wake-white); border: 1px solid var(--foam); }
+  .logo-card.on-amber { background: var(--signal-amber); }
+
+  .logo-card p {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    text-align: center;
+  }
+  .logo-card.on-dark p  { color: rgba(255,255,255,.4); }
+  .logo-card.on-amber p { color: rgba(0,0,0,.4); }
+
+  /* SVG logo inline */
+  .logo-svg { width: 140px; }
+
+  /* ── COLORS ── */
+  .color-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 16px;
+  }
+
+  .swatch {
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid rgba(0,0,0,.06);
+  }
+  .swatch-block { height: 80px; }
+  .swatch-info {
+    padding: 10px 12px;
+    background: white;
+  }
+  .swatch-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .swatch-hex {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .swatch-role {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  /* ── TYPOGRAPHY ── */
+  .type-row {
+    padding: 24px 0;
+    border-bottom: 1px solid var(--foam);
+  }
+  .type-row:last-child { border-bottom: none; }
+
+  .type-meta {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .type-display {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 56px;
+    color: var(--ocean-deep);
+    letter-spacing: .03em;
+    line-height: 1;
+  }
+
+  .type-heading {
+    font-family: 'Inter', sans-serif;
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--ocean-deep);
+  }
+
+  .type-body {
+    font-family: 'Inter', sans-serif;
+    font-size: 15px;
+    font-weight: 400;
+    color: #3A5068;
+    max-width: 560px;
+  }
+
+  .type-mono {
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    color: var(--signal-amber);
+    background: var(--ocean-deep);
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 4px;
+  }
+
+  /* ── VOICE & TONE ── */
+  .voice-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  .voice-card {
+    border-radius: 8px;
+    padding: 20px;
+  }
+  .voice-card.do   { background: #EAF6F0; border-left: 3px solid #27AE60; }
+  .voice-card.dont { background: #FEF0EE; border-left: 3px solid var(--nav-red); }
+
+  .voice-card .tag {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: .14em;
+    font-weight: 700;
+    margin-bottom: 10px;
+  }
+  .voice-card.do   .tag { color: #27AE60; }
+  .voice-card.dont .tag { color: var(--nav-red); }
+
+  .voice-card p { font-size: 13px; color: #3A5068; }
+  .voice-card .example {
+    margin-top: 10px;
+    font-style: italic;
+    font-size: 13px;
+    color: var(--ink);
+    font-weight: 500;
+  }
+
+  /* ── CONTENT PILLARS ── */
+  .pillars {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
+  }
+
+  .pillar {
+    background: var(--ocean-deep);
+    border-radius: 8px;
+    padding: 24px;
+    position: relative;
+    overflow: hidden;
+  }
+  .pillar::before {
+    content: attr(data-n);
+    position: absolute;
+    bottom: -16px; right: 12px;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 72px;
+    color: rgba(255,255,255,.05);
+    line-height: 1;
+  }
+
+  .pillar-icon { font-size: 24px; margin-bottom: 12px; }
+  .pillar h4 {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 20px;
+    color: var(--signal-amber);
+    letter-spacing: .04em;
+    margin-bottom: 8px;
+  }
+  .pillar p { font-size: 12px; color: var(--foam); line-height: 1.5; }
+
+  /* ── THUMBNAIL TEMPLATE ── */
+  .thumb-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 20px;
+  }
+
+  .thumb {
+    border-radius: 10px;
+    overflow: hidden;
+    aspect-ratio: 16/9;
+    position: relative;
+    display: flex;
+    align-items: flex-end;
+  }
+
+  .thumb-a {
+    background: linear-gradient(135deg, var(--ocean-deep) 0%, var(--ocean-mid) 100%);
+  }
+  .thumb-b {
+    background: linear-gradient(160deg, #0B1E30 0%, #1A4A72 60%, var(--signal-amber) 140%);
+  }
+
+  .thumb-waves {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 50%;
+    opacity: .18;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 6px,
+      rgba(255,255,255,.5) 6px,
+      rgba(255,255,255,.5) 7px
+    );
+    mask-image: linear-gradient(to top, rgba(0,0,0,1), rgba(0,0,0,0));
+  }
+
+  .thumb-badge {
+    position: absolute;
+    top: 12px; right: 12px;
+    background: var(--signal-amber);
+    color: var(--ink);
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    padding: 4px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+  }
+
+  .thumb-content {
+    padding: 14px;
+    position: relative;
+    z-index: 1;
+    width: 100%;
+  }
+
+  .thumb-number {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 13px;
+    color: var(--signal-amber);
+    letter-spacing: .12em;
+  }
+
+  .thumb-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 22px;
+    color: white;
+    line-height: 1.05;
+    letter-spacing: .03em;
+  }
+
+  /* ── CHANNEL ART / BANNER ── */
+  .banner {
+    aspect-ratio: 16/4;
+    background: var(--ocean-deep);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    padding: 0 48px;
+    gap: 32px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .banner::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 600px 300px at 80% 50%, rgba(26,74,114,.7), transparent),
+      repeating-linear-gradient(90deg, transparent, transparent 80px, rgba(255,255,255,.015) 80px, rgba(255,255,255,.015) 81px);
+  }
+
+  .banner-logo-mark {
+    width: 56px; height: 56px;
+    flex-shrink: 0;
+    position: relative; z-index: 1;
+  }
+
+  .banner-text { position: relative; z-index: 1; }
+
+  .banner-name {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 36px;
+    color: white;
+    letter-spacing: .06em;
+    line-height: 1;
+  }
+  .banner-name span { color: var(--signal-amber); }
+
+  .banner-sub {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    font-family: 'Space Mono', monospace;
+    margin-top: 4px;
+  }
+
+  .banner-divider {
+    width: 1px;
+    height: 48px;
+    background: rgba(255,255,255,.1);
+    position: relative; z-index: 1;
+  }
+
+  .banner-stats {
+    display: flex;
+    gap: 28px;
+    position: relative; z-index: 1;
+  }
+  .stat-block { text-align: center; }
+  .stat-n {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 22px;
+    color: var(--signal-amber);
+    line-height: 1;
+  }
+  .stat-l {
+    font-size: 10px;
+    color: var(--muted);
+    font-family: 'Space Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+  }
+
+  /* ── MOTION NOTES ── */
+  .motion-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--ocean-deep);
+    color: var(--foam);
+    border-radius: 100px;
+    padding: 8px 16px;
+    font-size: 13px;
+    margin: 6px 6px 0 0;
+  }
+  .motion-chip .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--signal-amber);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%,100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: .4; transform: scale(.7); }
+  }
+
+  /* ── CHANNEL DESCRIPTION ── */
+  .desc-box {
+    background: var(--ocean-deep);
+    border-radius: 8px;
+    padding: 28px 32px;
+    color: var(--foam);
+    font-size: 14px;
+    line-height: 1.8;
+  }
+  .desc-box strong { color: var(--signal-amber); font-weight: 600; }
+
+  @media (max-width: 600px) {
+    .section { padding: 28px 20px; }
+    .hero     { padding: 48px 24px 40px; }
+    .voice-grid { grid-template-columns: 1fr; }
+    .banner { flex-direction: column; aspect-ratio: auto; padding: 28px 20px; gap: 16px; }
+    .banner-divider { width: 80px; height: 1px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ───── HERO ───── -->
+  <div class="hero">
+    <div class="hero-eyebrow">Brand Kit · Édition 2025</div>
+    <div class="hero-name">CAP<br><span>PERMIS</span></div>
+    <div class="hero-tagline">Le cap YouTube qui t'aide à <strong>décrocher ton permis bateau</strong>, sans te noyer dans les règles.</div>
+  </div>
+
+  <!-- ───── LOGO ───── -->
+  <div class="section">
+    <div class="section-label">01 — Logotype</div>
+    <h2>Le Logo</h2>
+    <p style="color:#3A5068;font-size:14px;margin-bottom:32px;">Un compas qui se double d'un cap — la double lecture est volontaire. L'aiguille pointe toujours vers la réussite.</p>
+
+    <div class="logo-grid">
+      <!-- Version fond sombre -->
+      <div class="logo-card on-dark">
+        <svg class="logo-svg" viewBox="0 0 200 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <!-- Compas icon -->
+          <circle cx="32" cy="32" r="22" stroke="#1A4A72" stroke-width="2"/>
+          <circle cx="32" cy="32" r="16" stroke="#2A5F8A" stroke-width="1"/>
+          <line x1="32" y1="10" x2="32" y2="54" stroke="#8AA4BE" stroke-width="1" stroke-dasharray="2 2"/>
+          <line x1="10" y1="32" x2="54" y2="32" stroke="#8AA4BE" stroke-width="1" stroke-dasharray="2 2"/>
+          <!-- Needle pointing up-right -->
+          <polygon points="32,14 36,32 32,28 28,32" fill="#F5A623"/>
+          <polygon points="32,50 28,32 32,36 36,32" fill="#1A4A72"/>
+          <circle cx="32" cy="32" r="3" fill="#F0F6FF"/>
+          <!-- Text -->
+          <text x="64" y="26" font-family="'Bebas Neue', sans-serif" font-size="22" fill="#F0F6FF" letter-spacing="2">CAP</text>
+          <text x="64" y="48" font-family="'Bebas Neue', sans-serif" font-size="22" fill="#F5A623" letter-spacing="2">PERMIS</text>
+        </svg>
+        <p>Fond sombre · Principal</p>
+      </div>
+
+      <!-- Version fond clair -->
+      <div class="logo-card on-light">
+        <svg class="logo-svg" viewBox="0 0 200 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="32" cy="32" r="22" stroke="#D6E8F7" stroke-width="2"/>
+          <circle cx="32" cy="32" r="16" stroke="#B8D4EC" stroke-width="1"/>
+          <line x1="32" y1="10" x2="32" y2="54" stroke="#8AA4BE" stroke-width="1" stroke-dasharray="2 2"/>
+          <line x1="10" y1="32" x2="54" y2="32" stroke="#8AA4BE" stroke-width="1" stroke-dasharray="2 2"/>
+          <polygon points="32,14 36,32 32,28 28,32" fill="#F5A623"/>
+          <polygon points="32,50 28,32 32,36 36,32" fill="#1A4A72"/>
+          <circle cx="32" cy="32" r="3" fill="#0B2540"/>
+          <text x="64" y="26" font-family="'Bebas Neue', sans-serif" font-size="22" fill="#0B2540" letter-spacing="2">CAP</text>
+          <text x="64" y="48" font-family="'Bebas Que', sans-serif" font-size="22" fill="#1A4A72" letter-spacing="2">PERMIS</text>
+        </svg>
+        <p>Fond clair · Secondaire</p>
+      </div>
+
+      <!-- Version fond amber -->
+      <div class="logo-card on-amber">
+        <svg class="logo-svg" viewBox="0 0 200 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="32" cy="32" r="22" stroke="rgba(0,0,0,.2)" stroke-width="2"/>
+          <circle cx="32" cy="32" r="16" stroke="rgba(0,0,0,.1)" stroke-width="1"/>
+          <line x1="32" y1="10" x2="32" y2="54" stroke="rgba(0,0,0,.2)" stroke-width="1" stroke-dasharray="2 2"/>
+          <line x1="10" y1="32" x2="54" y2="32" stroke="rgba(0,0,0,.2)" stroke-width="1" stroke-dasharray="2 2"/>
+          <polygon points="32,14 36,32 32,28 28,32" fill="#0B2540"/>
+          <polygon points="32,50 28,32 32,36 36,32" fill="rgba(0,0,0,.3)"/>
+          <circle cx="32" cy="32" r="3" fill="#0B2540"/>
+          <text x="64" y="26" font-family="'Bebas Neue', sans-serif" font-size="22" fill="#0B2540" letter-spacing="2">CAP</text>
+          <text x="64" y="48" font-family="'Bebas Neue', sans-serif" font-size="22" fill="rgba(0,0,0,.6)" letter-spacing="2">PERMIS</text>
+        </svg>
+        <p>Fond ambre · Accent</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───── COULEURS ───── -->
+  <div class="section">
+    <div class="section-label">02 — Palette chromatique</div>
+    <h2>Les Couleurs</h2>
+    <p style="color:#3A5068;font-size:14px;margin-bottom:32px;">L'océan la nuit, l'ambre d'un feu de position, l'écume sur la proue. Cinq couleurs, une seule ambition.</p>
+
+    <div class="color-grid">
+      <div class="swatch">
+        <div class="swatch-block" style="background:#0B2540;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Océan Profond</div>
+          <div class="swatch-hex">#0B2540</div>
+          <div class="swatch-role">Fond principal · Texte fort</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-block" style="background:#1A4A72;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Horizon Bleu</div>
+          <div class="swatch-hex">#1A4A72</div>
+          <div class="swatch-role">Fond secondaire · Composants</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-block" style="background:#F5A623;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Ambre Signal</div>
+          <div class="swatch-hex">#F5A623</div>
+          <div class="swatch-role">Accent · CTAs · Titres clés</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-block" style="background:#F0F6FF;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Écume Blanche</div>
+          <div class="swatch-hex">#F0F6FF</div>
+          <div class="swatch-role">Texte sur fond sombre</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-block" style="background:#D6E8F7;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Fond Calme</div>
+          <div class="swatch-hex">#D6E8F7</div>
+          <div class="swatch-role">Arrière-plans · Séparateurs</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-block" style="background:#8AA4BE;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Brume Muted</div>
+          <div class="swatch-hex">#8AA4BE</div>
+          <div class="swatch-role">Texte secondaire · Labels</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───── TYPOGRAPHIE ───── -->
+  <div class="section">
+    <div class="section-label">03 — Typographie</div>
+    <h2>Les Polices</h2>
+
+    <div class="type-row">
+      <div class="type-meta">Display — Bebas Neue · Titres YouTube, thumbnails, headers</div>
+      <div class="type-display">CAP PERMIS</div>
+    </div>
+
+    <div class="type-row">
+      <div class="type-meta">Heading — Inter 600 · Sous-titres, descriptions de section</div>
+      <div class="type-heading">Tout savoir sur les balises et le balisage maritime</div>
+    </div>
+
+    <div class="type-row">
+      <div class="type-meta">Body — Inter 400 · Corps de texte, descriptions vidéo</div>
+      <div class="type-body">Dans cette vidéo, on décortique ensemble les règles de priorité en mer. Pas de jargon inutile : on prend des exemples concrets et on avance cap sur le permis.</div>
+    </div>
+
+    <div class="type-row">
+      <div class="type-meta">Mono — Space Mono · Labels, timestamps, codes, data</div>
+      <div class="type-mono">RÈGLE 15 · PRIORITÉ TRIBORD</div>
+    </div>
+  </div>
+
+  <!-- ───── THUMBNAILS ───── -->
+  <div class="section">
+    <div class="section-label">04 — Visuels & Thumbnails</div>
+    <h2>Templates Miniatures</h2>
+    <p style="color:#3A5068;font-size:14px;margin-bottom:28px;">Consistance sur toutes les vignettes : fond océan, titre Bebas, badge ambre en haut à droite.</p>
+
+    <div class="thumb-grid">
+      <div class="thumb thumb-a">
+        <div class="thumb-waves"></div>
+        <div class="thumb-badge">Tuto</div>
+        <div class="thumb-content">
+          <div class="thumb-number">LEÇON 01</div>
+          <div class="thumb-title">Les Feux de<br>Navigation</div>
+        </div>
+      </div>
+
+      <div class="thumb thumb-b">
+        <div class="thumb-waves"></div>
+        <div class="thumb-badge">Quiz</div>
+        <div class="thumb-content">
+          <div class="thumb-number">TEST PERMIS</div>
+          <div class="thumb-title">20 Questions<br>Piège à Éviter</div>
+        </div>
+      </div>
+
+      <div class="thumb thumb-a">
+        <div class="thumb-waves"></div>
+        <div class="thumb-badge">Guide</div>
+        <div class="thumb-content">
+          <div class="thumb-number">MANŒUVRE</div>
+          <div class="thumb-title">Accoster Sans<br>Paniquer</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:24px; padding:16px; background:var(--foam); border-radius:8px;">
+      <h3 style="margin-bottom:8px;">Règles d'or pour les thumbnails</h3>
+      <ul style="font-size:13px;color:#3A5068;padding-left:18px;line-height:2;">
+        <li>Toujours un badge <span style="font-family:monospace;background:#0B2540;color:#F5A623;padding:1px 6px;border-radius:3px;font-size:11px;">TUTO / QUIZ / GUIDE</span> en ambre</li>
+        <li>Titre en Bebas Neue, max 3 mots par ligne, taille ≥ 60px</li>
+        <li>Fond toujours dans la palette Océan Profond / Horizon Bleu</li>
+        <li>Un seul élément ambre par vignette (badge OU highlight de titre)</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ───── BANNER ───── -->
+  <div class="section">
+    <div class="section-label">05 — Bannière YouTube</div>
+    <h2>Channel Art</h2>
+    <div style="margin-top:24px;">
+      <div class="banner">
+        <!-- Compass logomark SVG -->
+        <svg class="banner-logo-mark" viewBox="0 0 56 56" fill="none">
+          <circle cx="28" cy="28" r="24" stroke="#1A4A72" stroke-width="2"/>
+          <circle cx="28" cy="28" r="17" stroke="#2A5F8A" stroke-width="1"/>
+          <polygon points="28,8 32,28 28,24 24,28" fill="#F5A623"/>
+          <polygon points="28,48 24,28 28,32 32,28" fill="#1A4A72"/>
+          <circle cx="28" cy="28" r="3.5" fill="#F0F6FF"/>
+        </svg>
+        <div class="banner-text">
+          <div class="banner-name">CAP <span>PERMIS</span></div>
+          <div class="banner-sub">Ton cap vers le permis bateau</div>
+        </div>
+        <div class="banner-divider"></div>
+        <div class="banner-stats">
+          <div class="stat-block">
+            <div class="stat-n">50+</div>
+            <div class="stat-l">Vidéos</div>
+          </div>
+          <div class="stat-block">
+            <div class="stat-n">100%</div>
+            <div class="stat-l">Gratuit</div>
+          </div>
+          <div class="stat-block">
+            <div class="stat-n">1 Cap</div>
+            <div class="stat-l">Le tien</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───── VOIX & TON ───── -->
+  <div class="section">
+    <div class="section-label">06 — Voix & Ton</div>
+    <h2>La Personnalité</h2>
+    <p style="color:#3A5068;font-size:14px;margin-bottom:28px;">Pédagogue sans condescendance. Complice sans être familier. Expert sans jargon inutile.</p>
+
+    <div class="voice-grid">
+      <div class="voice-card do">
+        <div class="tag">✓ À faire</div>
+        <p>Parler directement à l'abonné, comme un ami qui s'y connaît.</p>
+        <div class="example">"Aujourd'hui, tu vas enfin comprendre les feux de position."</div>
+      </div>
+      <div class="voice-card dont">
+        <div class="tag">✗ À éviter</div>
+        <p>Un ton académique ou distant qui perd le débutant.</p>
+        <div class="example">"Nous allons étudier les dispositifs lumineux réglementaires."</div>
+      </div>
+      <div class="voice-card do">
+        <div class="tag">✓ À faire</div>
+        <p>Vulgariser avec des analogies du quotidien.</p>
+        <div class="example">"C'est comme un giratoire, mais sur l'eau — celui de droite passe en premier."</div>
+      </div>
+      <div class="voice-card dont">
+        <div class="tag">✗ À éviter</div>
+        <p>Surutiliser le jargon nautique sans l'expliquer immédiatement.</p>
+        <div class="example">"Le couplet sous le vent doit respecter la route orthodromique…"</div>
+      </div>
+      <div class="voice-card do">
+        <div class="tag">✓ À faire</div>
+        <p>Encourager avec de la progression concrète.</p>
+        <div class="example">"Tu viens de finir le module 3. Le permis est à portée de main."</div>
+      </div>
+      <div class="voice-card dont">
+        <div class="tag">✗ À éviter</div>
+        <p>Minimiser les difficultés ou promettre une réussite sans effort.</p>
+        <div class="example">"C'est super simple, tout le monde y arrive facilement !"</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───── PILLIERS CONTENU ───── -->
+  <div class="section">
+    <div class="section-label">07 — Piliers de contenu</div>
+    <h2>Les 4 Piliers</h2>
+    <div style="margin-top:24px;">
+      <div class="pillars">
+        <div class="pillar" data-n="1">
+          <div class="pillar-icon">⚓</div>
+          <h4>Cours Théorie</h4>
+          <p>Les règles COLREG, les balises, les feux — expliqués simplement, retenus facilement.</p>
+        </div>
+        <div class="pillar" data-n="2">
+          <div class="pillar-icon">🧭</div>
+          <h4>Navigation Pratique</h4>
+          <p>Manœuvres, accostage, lecture de carte : de la théorie au bateau réel.</p>
+        </div>
+        <div class="pillar" data-n="3">
+          <div class="pillar-icon">📋</div>
+          <h4>Quiz & Tests</h4>
+          <p>Simulations d'examen, questions pièges, corrections détaillées pour être prêt·e le jour J.</p>
+        </div>
+        <div class="pillar" data-n="4">
+          <div class="pillar-icon">🌊</div>
+          <h4>Vie de Marin</h4>
+          <p>Météo marine, équipement, sécurité : tout ce qu'on n'apprend pas dans le manuel.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───── MOTION ───── -->
+  <div class="section">
+    <div class="section-label">08 — Motion & Animation</div>
+    <h2>Les Mouvements</h2>
+    <p style="color:#3A5068;font-size:14px;margin-bottom:24px;">Des animations qui évoquent la houle — fluides et répétitives, jamais saccadées.</p>
+
+    <div>
+      <div class="motion-chip"><div class="dot"></div>Vague lente · 6–8s ease-in-out infinite</div>
+      <div class="motion-chip"><div class="dot"></div>Fade-in cards · 0.4s cubic-bezier(.4,0,.2,1)</div>
+      <div class="motion-chip"><div class="dot"></div>Hover lift · translateY(-3px) 0.2s</div>
+      <div class="motion-chip"><div class="dot"></div>Intro logo · scale 0.8→1 + opacity 0→1 · 0.6s</div>
+      <div class="motion-chip"><div class="dot"></div>Texte défilé · typewriter effect sur les titres</div>
+    </div>
+  </div>
+
+  <!-- ───── DESCRIPTION CHAÎNE ───── -->
+  <div class="section">
+    <div class="section-label">09 — Copywriting</div>
+    <h2>Description de Chaîne</h2>
+    <div class="desc-box" style="margin-top:24px;">
+      <p>🧭 <strong>Cap Permis</strong>, c'est la chaîne YouTube qui t'accompagne pas à pas jusqu'à ton permis plaisance.</p>
+      <br>
+      <p>Chaque semaine, une nouvelle vidéo pour <strong>comprendre les règles</strong>, <strong>mémoriser les questions d'examen</strong> et te <strong>préparer aux manœuvres</strong> — sans jargon, sans prise de tête.</p>
+      <br>
+      <p>Que tu passes le <strong>permis côtier</strong>, le <strong>permis fluvial</strong> ou l'<strong>extension hauturière</strong>, tu es au bon endroit. Abonne-toi et mets le cap sur la réussite. ⚓</p>
+      <br>
+      <p style="color:var(--muted);font-size:12px;font-family:Space Mono,monospace;">→ Vidéos théorie · Quiz examen · Manœuvres · Météo marine</p>
+    </div>
+  </div>
+
+  <!-- ───── FOOTER ───── -->
+  <div style="text-align:center;padding-top:16px;">
+    <span style="font-family:'Space Mono',monospace;font-size:10px;color:#8AA4BE;letter-spacing:.14em;">CAP PERMIS · BRAND KIT 2025 · TOUS DROITS RÉSERVÉS</span>
+  </div>
+
+</div>
+</body>
+</html>

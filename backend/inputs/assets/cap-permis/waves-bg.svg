@@ -1,0 +1,17 @@
+<svg viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="ocean" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0B2540"/>
+      <stop offset="1" stop-color="#08111D"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.82" cy="0.2" r="0.4">
+      <stop offset="0" stop-color="#F5A623" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#F5A623" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#ocean)"/>
+  <rect width="1920" height="1080" fill="url(#glow)"/>
+  <path d="M0,740 C480,680 960,820 1920,720 L1920,1080 L0,1080 Z" fill="#1A4A72" opacity="0.50"/>
+  <path d="M0,850 C600,790 1200,920 1920,830 L1920,1080 L0,1080 Z" fill="#1A4A72" opacity="0.32"/>
+  <path d="M0,960 C500,920 1100,1010 1920,930 L1920,1080 L0,1080 Z" fill="#D6E8F7" opacity="0.08"/>
+</svg>

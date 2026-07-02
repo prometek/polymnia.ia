@@ -1,0 +1,7 @@
+node_modules
+out
+.DS_Store
+
+# Artefacts de rendu (regeneres par pack_render.py)
+render-input.json
+public/audio/

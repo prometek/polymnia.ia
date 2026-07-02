@@ -1,0 +1,1 @@
+/Users/guillaume/obsidian-vault/02 - Projects/polymnia.ai/docs/Achitecture & Suivi de projet.md

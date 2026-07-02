@@ -1,0 +1,41 @@
+{
+  "id": "carnet-de-bord",
+  "name": "Carnet de Bord",
+  "tagline": "Apprendre la mer, croquis a l'appui",
+  "visualStyle": "whiteboard",
+  "kicker_style": "numbered",
+
+  "cosmetic": {
+    "named_palette": {
+      "paper":  { "hex": "#f7f6f2", "role": "Main background" },
+      "cream":  { "hex": "#ece9e1", "role": "Secondary background" },
+      "marker": { "hex": "#d6453d", "role": "Accent / marker red" },
+      "ink_blue": { "hex": "#2b6cb0", "role": "Secondary accent" },
+      "ink":    { "hex": "#1a1a1a", "role": "Text / ink" },
+      "muted":  { "hex": "#6b675f", "role": "Secondary text" }
+    },
+    "palette": {
+      "bg0": "#f7f6f2",
+      "bg1": "#ece9e1",
+      "accent": "#d6453d",
+      "accent2": "#2b6cb0",
+      "warn": "#d6453d",
+      "text": "#1a1a1a"
+    },
+    "fonts": {}
+  },
+
+  "voice": {
+    "personality": "Pedagogue, chaleureux, comme un prof qui dessine au tableau.",
+    "informal": true,
+    "do": ["Expliquer pas a pas.", "Images concretes."],
+    "dont": ["Jargon non explique."]
+  },
+
+  "assets": [
+    { "id": "icon-anchor",   "type": "icon", "glyph": "anchor",   "emoji": "⚓", "usage": "Theory / rules" },
+    { "id": "icon-compass",  "type": "icon", "glyph": "compass",  "emoji": "🧭", "usage": "Navigation / heading" },
+    { "id": "icon-clipboard","type": "icon", "glyph": "clipboard","emoji": "📋", "usage": "Quiz / tests / steps" },
+    { "id": "icon-wave",     "type": "icon", "glyph": "wave",     "emoji": "🌊", "usage": "Sea / weather / safety" }
+  ]
+}
