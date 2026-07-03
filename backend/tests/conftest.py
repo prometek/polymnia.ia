@@ -41,6 +41,9 @@ def _ensure_test_database() -> None:
 
 _ensure_test_database()
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+# Tests build the schema via create_all (not Alembic); opt in explicitly before
+# importing api.* (the DEV_CREATE_ALL flag is read at import time).
+os.environ["POLYMNIA_DEV_CREATE_ALL"] = "1"
 
 # Import only after DATABASE_URL points at the test DB (engine is import-time).
 import pytest  # noqa: E402

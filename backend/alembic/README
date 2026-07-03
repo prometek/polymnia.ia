@@ -1,0 +1,33 @@
+Alembic migrations — Polymnia backend
+=====================================
+
+Schema source of truth: api/models.py (SQLModel). Alembic owns the *evolution* of
+the live schema; SQLModel.create_all is dev/POC only (see api/session.py).
+
+Config
+------
+- Connection: derived from DATABASE_URL by env.py (via api.session), normalised to
+  the psycopg 3 driver. There is no sqlalchemy.url in alembic.ini on purpose.
+- target_metadata = SQLModel.metadata, so `--autogenerate` diffs against the models.
+- Run all commands from backend/ with uv, e.g. `uv run alembic ...`.
+
+Common commands
+---------------
+- Apply latest:            uv run alembic upgrade head
+- Roll back one:           uv run alembic downgrade -1
+- New migration (auto):    uv run alembic revision --autogenerate -m "describe change"
+- Show current revision:   uv run alembic current
+- History:                 uv run alembic history
+
+Workflow when the model changes
+-------------------------------
+1. Edit api/models.py.
+2. `uv run alembic revision --autogenerate -m "..."`.
+3. Review the generated file (autogenerate misses some ALTERs — check it).
+4. `uv run alembic upgrade head`, then re-run autogenerate to confirm an empty diff.
+
+Dev bootstrap without migrations
+--------------------------------
+Set POLYMNIA_DEV_CREATE_ALL=1 to let the app build the schema via create_all at
+startup (fast local iteration). Prod never sets it: schema is applied with
+`uv run alembic upgrade head` before the app boots.
