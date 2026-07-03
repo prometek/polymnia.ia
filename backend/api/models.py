@@ -131,6 +131,37 @@ class Video(SQLModel, table=True):
     )
 
 
+class Job(SQLModel, table=True):
+    """Durable work item for the queue (issue #6): decouples generation/render from
+    the API process. `type` says what the worker runs; `status` tracks its lifecycle
+    (queued -> running -> done/error), separate from the video's own status vocabulary.
+    Advanced retries/DLQ land in PRO-10; the read endpoint in PRO-08.
+    """
+
+    __tablename__ = "jobs"
+
+    id: uuid.UUID | None = _uuid_pk()
+    video_id: str = Field(
+        sa_column=Column(
+            Text, ForeignKey("videos.id", ondelete="CASCADE"), nullable=False, index=True
+        )
+    )
+    type: str = Field(sa_column=Column(Text, nullable=False))  # generation | render
+    status: str = Field(
+        default="queued", sa_column=Column(Text, nullable=False, server_default=text("'queued'"))
+    )
+    error: str | None = Field(default=None, sa_column=Column(Text))
+    step: str | None = Field(default=None, sa_column=Column(Text))  # optional worker progress label
+    progress: int | None = Field(default=None, sa_column=Column(Integer))  # optional 0..100
+    created_at: datetime | None = _created_at()
+    updated_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        ),
+    )
+
+
 class Scene(SQLModel, table=True):
     __tablename__ = "scenes"
     __table_args__ = (UniqueConstraint("video_id", "ord"),)

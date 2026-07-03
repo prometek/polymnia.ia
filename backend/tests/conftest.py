@@ -53,7 +53,7 @@ from api.session import engine  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
-_TABLES = ("scenes", "videos", "assets", "brand_kit_versions", "brand_kits", "users")
+_TABLES = ("jobs", "scenes", "videos", "assets", "brand_kit_versions", "brand_kits", "users")
 
 
 @pytest.fixture(scope="session", autouse=True)

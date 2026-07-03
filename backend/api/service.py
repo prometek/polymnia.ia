@@ -54,7 +54,11 @@ def generate(pid: str, input_text: str, kit: Kit) -> tuple[list[Scene], float]:
 
 
 def run_generation(pid: str, input_text: str, kit: Kit) -> None:
-    """Background job: generate the whole project and persist it with a status transition."""
+    """Queue job: generate the whole project and persist it with a status transition.
+
+    Owns the *video* status (generating -> ready/error). Re-raises after marking the
+    video errored so the caller (Celery task) can fail the job and the broker retry.
+    """
     try:
         scenes, total = generate(pid, input_text, kit)
         db.replace_scenes(pid, scenes)
@@ -63,10 +67,15 @@ def run_generation(pid: str, input_text: str, kit: Kit) -> None:
     except Exception:
         db.set_status(pid, "error")
         logger.exception("generate failed for project %s", pid)
+        raise
 
 
 def run_render(pid: str, scenes: list[Scene], kit: Kit) -> None:
-    """Background job: render the MP4 and persist its path with a status transition."""
+    """Queue job: render the MP4 and persist its path with a status transition.
+
+    Owns the *video* status (rendering -> ready/error). Re-raises after marking the
+    video errored so the caller (Celery task) can fail the job and the broker retry.
+    """
     try:
         mp4 = render_project(pid, scenes, kit)
         db.set_mp4(pid, mp4)
@@ -74,6 +83,7 @@ def run_render(pid: str, scenes: list[Scene], kit: Kit) -> None:
     except Exception:
         db.set_status(pid, "error")
         logger.exception("render failed for project %s", pid)
+        raise
 
 
 def _find(scenes: list[Scene], order: int) -> int:

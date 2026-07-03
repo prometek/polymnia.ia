@@ -12,11 +12,12 @@ from typing import Any
 
 from sqlmodel import Session, col, select
 
-from .models import Asset, BrandKit, BrandKitVersion, Scene, User, Video
+from .models import Asset, BrandKit, BrandKitVersion, Job, Scene, User, Video
 from .session import engine, init_db
 
 __all__ = [
     "assets_of_version",
+    "create_job",
     "create_video",
     "ensure_user",
     "get_scenes",
@@ -27,6 +28,7 @@ __all__ = [
     "list_brand_kits",
     "list_videos",
     "replace_scenes",
+    "set_job_status",
     "set_mp4",
     "set_status",
     "set_total",
@@ -342,3 +344,30 @@ def upsert_scene(vid: str, scene: dict[str, Any]) -> None:
     with Session(engine) as s:
         _upsert_scene(s, vid, scene)
         s.commit()
+
+
+# --- Jobs ------------------------------------------------------------------
+
+
+def create_job(video_id: str, job_type: str) -> str:
+    """Create a queued job for a video and return its id. `job_type` = generation | render."""
+    with Session(engine) as s:
+        job = Job(video_id=video_id, type=job_type, status="queued")
+        s.add(job)
+        s.commit()
+        s.refresh(job)
+        assert job.id is not None  # PK populated by the DB on commit
+        return str(job.id)
+
+
+def set_job_status(job_id: str, status: str, error: str | None = None) -> None:
+    """Transition a job (queued -> running -> done/error). `error` set on failure only."""
+    with Session(engine) as s:
+        job = s.get(Job, uuid.UUID(job_id))
+        if job is None:
+            return
+        job.status = status
+        if error is not None:
+            job.error = error
+        s.add(job)
+        s.commit()  # updated_at bumped by onupdate=func.now()
