@@ -16,6 +16,20 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: polymnia
+        ports:
+          - 5432:5432
+        # Wait until the DB accepts connections before the job runs.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -38,6 +52,9 @@ jobs:
         run: uv run mypy
 
       - name: Tests
+        # DB-touching tests derive an isolated <db>_test from this URL (conftest).
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/polymnia
         run: uv run pytest
 
   render-motor:
