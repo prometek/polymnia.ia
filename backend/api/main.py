@@ -24,9 +24,11 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from tasks import generation
+from tasks import render as render_jobs
 
 from . import db, service
 
@@ -169,7 +171,7 @@ def project(video: Video) -> dict[str, Any]:
 
 
 @app.post("/projects", status_code=202, response_model=JobStarted)
-def new_project(body: CreateProject, bg: BackgroundTasks, user_id: UserId) -> JobStarted:
+def new_project(body: CreateProject, user_id: UserId) -> JobStarted:
     version_id = db.latest_version_id(body.brand_kit_id, user_id)
     if not version_id:
         raise HTTPException(404, f"brand kit '{body.brand_kit_id}' not found")
@@ -178,7 +180,10 @@ def new_project(body: CreateProject, bg: BackgroundTasks, user_id: UserId) -> Jo
         raise HTTPException(409, "brand kit version missing")
     pid = uuid.uuid4().hex[:12]
     db.create_video(pid, user_id, version_id, body.name or "Untitled")
-    bg.add_task(service.run_generation, pid, body.input_text, kit)
+    # Enqueue on the durable queue (issue #6) — survives an API restart, unlike the
+    # former in-process BackgroundTasks. A worker picks it up (workers = PRO-06/07).
+    job_id = db.create_job(pid, "generation")
+    generation.generate_task.delay(job_id, pid, body.input_text, kit)
     return JobStarted(id=pid, status="generating", brand_kit_version_id=version_id)
 
 
@@ -195,11 +200,12 @@ def direct_edit(pid: str, order: int, body: DirectEdit, video: Video, kit: Kit) 
 
 
 @app.post("/projects/{pid}/render", status_code=202, response_model=JobStarted)
-def render(pid: str, bg: BackgroundTasks, video: Video, kit: Kit) -> JobStarted:
+def render(pid: str, video: Video, kit: Kit) -> JobStarted:
     if not video["scenes"]:
         raise HTTPException(409, "project has no scenes yet")
     db.set_status(pid, "rendering")
-    bg.add_task(service.run_render, pid, video["scenes"], kit)
+    job_id = db.create_job(pid, "render")
+    render_jobs.render_task.delay(job_id, pid, video["scenes"], kit)
     return JobStarted(id=pid, status="rendering")
 
 
