@@ -30,6 +30,8 @@ Two subprojects with separate toolchains under a single git repo at the root.
 - Run a single test:   `uv run pytest tests/path::test_name`
 - Lint + format:       `uv run ruff check` · `uv run ruff format`   (Ruff is the only linter/formatter)
 - Type check:          `uv run mypy`   (strict; `files = ["api", "pipeline"]`)
+- DB migrations:       `uv run alembic upgrade head` (apply) · `uv run alembic revision --autogenerate -m "..."` (new) — see `backend/alembic/README`
+- Dev schema shortcut: set `POLYMNIA_DEV_CREATE_ALL=1` to build schema via `create_all` at startup (prod uses Alembic; create_all is a no-op without the flag)
 - Pre-commit:          `uv run pre-commit install --install-hooks --hook-type commit-msg`
 
 **Render-motor (`render-motor/`)**
