@@ -164,24 +164,34 @@ def assets_of_version(version_id: str) -> list[dict[str, Any]]:
         return _assets_of_version(s, uuid.UUID(version_id))
 
 
-def latest_version_id(brand_kit_id: str) -> str | None:
+def latest_version_id(brand_kit_id: str, user_id: str) -> str | None:
     with Session(engine) as s:
         vid = s.exec(
             select(BrandKitVersion.id)
-            .where(BrandKitVersion.brand_kit_id == brand_kit_id)
+            .join(BrandKit)
+            .where(
+                BrandKitVersion.brand_kit_id == brand_kit_id,
+                BrandKit.user_id == uuid.UUID(user_id),
+            )
             .order_by(col(BrandKitVersion.version).desc())
         ).first()
         return str(vid) if vid else None
 
 
-def kit_from_version(version_id: str) -> dict[str, Any] | None:
-    """Reconstruct the kit dict the pipeline expects, from a frozen version."""
+def kit_from_version(version_id: str, user_id: str) -> dict[str, Any] | None:
+    """Reconstruct the kit dict the pipeline expects, from a frozen version.
+
+    Returns None if the version doesn't exist or its brand kit belongs to another
+    user (ownership check — callers surface this as 404/409, no existence leak).
+    """
     with Session(engine) as s:
         v = s.get(BrandKitVersion, uuid.UUID(version_id))
         if v is None:
             return None
         assert v.id is not None
         bk = s.get(BrandKit, v.brand_kit_id)
+        if bk is None or bk.user_id != uuid.UUID(user_id):
+            return None
         style = v.style or {}
         return {
             "id": v.brand_kit_id,
@@ -194,9 +204,13 @@ def kit_from_version(version_id: str) -> dict[str, Any] | None:
         }
 
 
-def list_brand_kits() -> list[dict[str, Any]]:
+def list_brand_kits(user_id: str) -> list[dict[str, Any]]:
     with Session(engine) as s:
-        rows = s.exec(select(BrandKit).order_by(col(BrandKit.created_at))).all()
+        rows = s.exec(
+            select(BrandKit)
+            .where(BrandKit.user_id == uuid.UUID(user_id))
+            .order_by(col(BrandKit.created_at))
+        ).all()
         return [{"id": b.id, "name": b.name} for b in rows]
 
 
@@ -253,9 +267,11 @@ def set_mp4(vid: str, mp4_path: str) -> None:
     _set_video(vid, mp4_path=mp4_path)
 
 
-def get_video(vid: str) -> dict[str, Any] | None:
+def get_video(vid: str, user_id: str) -> dict[str, Any] | None:
     with Session(engine) as s:
-        v = s.get(Video, vid)
+        v = s.exec(
+            select(Video).where(Video.id == vid, Video.user_id == uuid.UUID(user_id))
+        ).one_or_none()
         if v is None:
             return None
         out = _video_to_dict(v)
@@ -263,9 +279,13 @@ def get_video(vid: str) -> dict[str, Any] | None:
         return out
 
 
-def list_videos() -> list[dict[str, Any]]:
+def list_videos(user_id: str) -> list[dict[str, Any]]:
     with Session(engine) as s:
-        rows = s.exec(select(Video).order_by(col(Video.created_at).desc())).all()
+        rows = s.exec(
+            select(Video)
+            .where(Video.user_id == uuid.UUID(user_id))
+            .order_by(col(Video.created_at).desc())
+        ).all()
         return [_video_to_dict(v) for v in rows]
 
 

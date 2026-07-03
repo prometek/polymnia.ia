@@ -54,7 +54,8 @@ files = ["api", "pipeline"]
 
 [tool.pytest.ini_options]
 # tests/ mirrors api/ and pipeline/; pipeline scripts import siblings, so the
-# pipeline dir is on sys.path for tests just like at runtime.
+# pipeline dir is on sys.path for tests just like at runtime. "." puts the backend
+# root on the path so `api` is importable as a package (api uses relative imports).
 testpaths = ["tests"]
-pythonpath = ["pipeline", "api"]
+pythonpath = [".", "pipeline", "api"]
 addopts = "-ra"

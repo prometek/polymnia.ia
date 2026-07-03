@@ -107,21 +107,25 @@ def get_user_id(request: Request) -> str:
     return user_id
 
 
-def require_video(pid: str) -> dict[str, Any]:
-    v = db.get_video(pid)
-    if not v:
+UserId = Annotated[str, Depends(get_user_id)]
+
+
+def require_video(pid: str, user_id: UserId) -> dict[str, Any]:
+    v = db.get_video(pid, user_id)
+    if not v:  # unknown id OR owned by another user → same 404 (no existence leak)
         raise HTTPException(404, "project not found")
     return v
 
 
-def require_kit(video: Annotated[dict[str, Any], Depends(require_video)]) -> dict[str, Any]:
-    kit = db.kit_from_version(video["brand_kit_version_id"])
+def require_kit(
+    video: Annotated[dict[str, Any], Depends(require_video)], user_id: UserId
+) -> dict[str, Any]:
+    kit = db.kit_from_version(video["brand_kit_version_id"], user_id)
     if not kit:
         raise HTTPException(409, "brand kit version missing")
     return kit
 
 
-UserId = Annotated[str, Depends(get_user_id)]
 Video = Annotated[dict[str, Any], Depends(require_video)]  # cached per request → fetched once
 Kit = Annotated[dict[str, Any], Depends(require_kit)]
 
@@ -130,8 +134,8 @@ Kit = Annotated[dict[str, Any], Depends(require_kit)]
 
 
 @app.get("/brand-kits", response_model=list[BrandKitSummary])
-def brand_kits() -> list[dict[str, Any]]:
-    return db.list_brand_kits()
+def brand_kits(user_id: UserId) -> list[dict[str, Any]]:
+    return db.list_brand_kits(user_id)
 
 
 @app.post("/brand-kits", status_code=201, response_model=BrandKitCreated)
@@ -143,9 +147,9 @@ def create_brand_kit(kit: dict[str, Any], user_id: UserId) -> BrandKitCreated:
 
 
 @app.get("/brand-kits/{bk_id}/assets")
-def brand_kit_assets(bk_id: str) -> list[dict[str, Any]]:
+def brand_kit_assets(bk_id: str, user_id: UserId) -> list[dict[str, Any]]:
     # Asset shape is dynamic (kit-specific meta merged in) → no response_model.
-    version_id = db.latest_version_id(bk_id)
+    version_id = db.latest_version_id(bk_id, user_id)
     if not version_id:
         raise HTTPException(404, f"brand kit '{bk_id}' not found")
     return db.assets_of_version(version_id)
@@ -155,8 +159,8 @@ def brand_kit_assets(bk_id: str) -> list[dict[str, Any]]:
 
 
 @app.get("/projects", response_model=list[VideoSummary])
-def projects() -> list[dict[str, Any]]:
-    return db.list_videos()
+def projects(user_id: UserId) -> list[dict[str, Any]]:
+    return db.list_videos(user_id)
 
 
 @app.get("/projects/{pid}", response_model=VideoRead)
@@ -166,10 +170,10 @@ def project(video: Video) -> dict[str, Any]:
 
 @app.post("/projects", status_code=202, response_model=JobStarted)
 def new_project(body: CreateProject, bg: BackgroundTasks, user_id: UserId) -> JobStarted:
-    version_id = db.latest_version_id(body.brand_kit_id)
+    version_id = db.latest_version_id(body.brand_kit_id, user_id)
     if not version_id:
         raise HTTPException(404, f"brand kit '{body.brand_kit_id}' not found")
-    kit = db.kit_from_version(version_id)
+    kit = db.kit_from_version(version_id, user_id)
     if not kit:
         raise HTTPException(409, "brand kit version missing")
     pid = uuid.uuid4().hex[:12]
