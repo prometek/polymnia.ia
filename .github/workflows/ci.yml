@@ -51,6 +51,19 @@ jobs:
       - name: Type check (mypy strict)
         run: uv run mypy
 
+      - name: Migrations apply + no schema drift
+        # Runs on the pristine `polymnia` service DB (tests use a sibling
+        # `polymnia_test`, so this database is never touched by pytest).
+        #   1. `upgrade head` fails if any migration is broken.
+        #   2. `check` autogenerates against SQLModel.metadata and fails if it
+        #      would emit any operation — i.e. a model changed without a
+        #      matching migration (silent schema ↔ model drift).
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/polymnia
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
+
       - name: Tests
         # DB-touching tests derive an isolated <db>_test from this URL (conftest).
         env:
