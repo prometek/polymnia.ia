@@ -44,9 +44,10 @@ Two subprojects with separate toolchains under a single git repo at the root.
 - Build render image:  `docker build -t polymnia-render-poc .`
 - Run render container: `docker run --rm -v "$PWD/out:/app/out" polymnia-render-poc`
 
-> CI is described in code-standards.md (GitHub Actions: lint, format check,
-> mypy, tsc, tests, image build) but **no `.github/workflows/` exists yet** —
-> it's a target, not current state.
+> CI is live: `.github/workflows/ci.yml` runs on PRs + `main` — backend Python
+> (`ruff check` + `ruff format --check`, `mypy` strict, `alembic upgrade` +
+> `alembic check`, `pytest`), render-motor TS (`tsc --noEmit`, Vitest), and a
+> render-image `docker build`. Deployment (dev/staging/prod) is not wired yet.
 
 ## How to validate a change end-to-end
 > Required before any change is handed back. Don't rely on unit tests alone.
