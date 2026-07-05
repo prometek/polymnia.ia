@@ -37,4 +37,11 @@ celery_app.conf.update(
     accept_content=["json"],
     result_serializer="json",
     task_track_started=True,
+    # Dedicated queues (issue #8): render is the heaviest CPU/RAM workload (Remotion),
+    # so it gets its own worker container that scales independently of generation.
+    task_default_queue="generation",
+    task_routes={
+        "render.render": {"queue": "render"},
+        "generation.generate": {"queue": "generation"},
+    },
 )

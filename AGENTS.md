@@ -44,6 +44,25 @@ Two subprojects with separate toolchains under a single git repo at the root.
 - Build render image:  `docker build -t polymnia-render-poc .`
 - Run render container: `docker run --rm -v "$PWD/out:/app/out" polymnia-render-poc`
 
+**Render worker (repo root — issue #8, containerized Celery worker)**
+- Build:                `docker build -f Dockerfile.render-worker -t polymnia-render-worker .`
+  (build context is the repo **root**: needs both `backend/` and `render-motor/`,
+  copied as siblings so `pipeline/pack_render.py`'s relative `RENDER_DIR` still resolves)
+- Run stack (compose):  `docker compose up -d redis render-worker` — Redis broker +
+  a Celery worker bound to the `render` queue only (`-Q render`); `DATABASE_URL`/
+  `MISTRAL_API_KEY` are read from `backend/.env` via `env_file` (optional — never
+  inlined in `docker-compose.yml`)
+- Validate config:      `docker compose config --quiet` (validates only — plain
+  `docker compose config` inlines `env_file` secrets as plaintext; never run
+  that form somewhere it could be logged/captured)
+- Worker logs:          `docker compose logs -f render-worker` → look for
+  `celery@... ready.` and `[queues] .> render`
+- Known limitation: the rendered MP4 path returned by `render_project()` is a
+  container-local absolute path (`/app/render-motor/out/...`); the compose
+  `render-out` named volume is a POC bridge to make it reachable outside the
+  container — real cross-service delivery needs Object Storage/CDN (PRO-12,
+  Étape 2).
+
 > CI is live: `.github/workflows/ci.yml` runs on PRs + `main` — backend Python
 > (`ruff check` + `ruff format --check`, `mypy` strict, `alembic upgrade` +
 > `alembic check`, `pytest`), render-motor TS (`tsc --noEmit`, Vitest), and a

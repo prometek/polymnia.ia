@@ -1,0 +1,46 @@
+# Local end-to-end stack for the containerized render worker (issue #8).
+#
+# Required services: `redis` (broker) + `render-worker` (Celery consumer bound
+# to the `render` queue only — the heaviest CPU/RAM workload, isolated in its
+# own container so it scales/restarts independently of the API).
+#
+# The API has no Dockerfile yet; run it on the host against this same Redis:
+#   REDIS_URL=redis://localhost:6379/0 uv run uvicorn api.main:app --reload
+# (from backend/, with the rest of backend/.env loaded as usual).
+#
+# Secrets are NEVER inlined here: DATABASE_URL / MISTRAL_API_KEY etc. are read
+# by the worker from backend/.env via `env_file` (kept optional so this file
+# still parses/builds in environments without a `backend/.env`, e.g. CI).
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  render-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.render-worker
+    depends_on:
+      - redis
+    env_file:
+      - path: backend/.env
+        required: false
+    environment:
+      # Overrides whatever REDIS_URL backend/.env has for host-side dev — the
+      # worker must reach Redis by its compose service name, not localhost.
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      # Shared render output so a rendered MP4 (written by this container at
+      # /app/render-motor/out) can be picked up outside it. This is the POC
+      # bridge only: the path api/service.py::render_project() returns is a
+      # container-local absolute path, so cross-container/host download still
+      # needs Object Storage/CDN (PRO-12, Étape 2) — out of scope here.
+      - render-out:/app/render-motor/out
+
+volumes:
+  redis-data:
+  render-out:
