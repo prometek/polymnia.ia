@@ -10,7 +10,16 @@ Broker: `REDIS_URL` (default local Redis). Result backend is optional — applic
 status lives in the `jobs` table (see api/models.py), so it defaults to disabled;
 set `CELERY_RESULT_BACKEND` to turn on Celery's own result store when needed.
 
-Run a worker from backend/:  uv run celery -A api.celery_app worker --loglevel=info
+Queues (issue #7): generation is routed to its own `generation` queue so the
+generation worker is autonomous and scales independently of the API (and, later,
+of the render worker). Render stays on the default `celery` queue until it gets
+its own worker + queue in PRO-07.
+
+Run the generation worker from backend/ (this issue):
+    uv run celery -A api.celery_app worker -Q generation -n generation@%h --loglevel=info
+The default worker (`... worker --loglevel=info`, queue `celery`) still drains
+render until PRO-07 splits it out. In dev, one worker can drain both:
+    uv run celery -A api.celery_app worker -Q generation,celery --loglevel=info
 """
 
 import os

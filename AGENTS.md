@@ -25,6 +25,7 @@ Two subprojects with separate toolchains under a single git repo at the root.
 **Backend (`backend/`)**
 - Install deps:        `uv sync`
 - Run dev server:      `uv run uvicorn api.main:app --reload`   (FastAPI app: `api.main:app`)
+- Run generation worker:`uv run celery -A api.celery_app worker -Q generation -n generation@%h --loglevel=info`   # drains generation jobs (issue #7); needs a running Redis (`REDIS_URL`)
 - Run full pipeline:   `./run.sh [input.txt] [styleId] [brand_kit.json]`   # input.txt → MP4
 - Run tests:           `uv run pytest`                 # tests live in `backend/tests/` (mirrors api/ + pipeline/)
 - Run a single test:   `uv run pytest tests/path::test_name`
