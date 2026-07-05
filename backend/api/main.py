@@ -101,6 +101,15 @@ class VideoRead(VideoSummary):
     scenes: list[dict[str, Any]]
 
 
+class JobStatus(BaseModel):
+    id: str
+    type: str
+    status: str
+    step: str | None = None
+    video_id: str
+    error: str | None = None
+
+
 # --- Dependencies ----------------------------------------------------------
 
 
@@ -128,8 +137,16 @@ def require_kit(
     return kit
 
 
+def require_job(job_id: str, user_id: UserId) -> dict[str, Any]:
+    job = db.get_job(job_id, user_id)
+    if not job:  # unknown id, malformed uuid, OR owned by another user → same 404
+        raise HTTPException(404, "job not found")
+    return job
+
+
 Video = Annotated[dict[str, Any], Depends(require_video)]  # cached per request → fetched once
 Kit = Annotated[dict[str, Any], Depends(require_kit)]
+JobRead = Annotated[dict[str, Any], Depends(require_job)]
 
 
 # --- Brand kits ------------------------------------------------------------
@@ -214,3 +231,11 @@ def download_video(video: Video) -> FileResponse:
     if not video["mp4_path"] or not os.path.exists(video["mp4_path"]):
         raise HTTPException(404, "no rendered video yet")
     return FileResponse(video["mp4_path"], media_type="video/mp4", filename=f"{video['id']}.mp4")
+
+
+# --- Jobs --------------------------------------------------------------------
+
+
+@app.get("/jobs/{job_id}", response_model=JobStatus)
+def job_status(job: JobRead) -> dict[str, Any]:
+    return job

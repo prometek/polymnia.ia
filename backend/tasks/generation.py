@@ -22,7 +22,7 @@ def generate_task(job_id: str, pid: str, input_text: str, kit: Kit) -> None:
     """
     db.set_job_status(job_id, "running")
     try:
-        service.run_generation(pid, input_text, kit)
+        service.run_generation(pid, input_text, kit, job_id)
     except Exception as exc:
         db.set_job_status(job_id, "error", error=str(exc))
         logger.exception("generation job %s failed for project %s", job_id, pid)
