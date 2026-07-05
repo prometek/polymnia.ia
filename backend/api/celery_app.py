@@ -46,10 +46,11 @@ celery_app.conf.update(
     accept_content=["json"],
     result_serializer="json",
     task_track_started=True,
-    # Route generation to a dedicated queue so its worker is independently scalable
-    # (issue #7). Unrouted tasks (render, for now) fall through to the default
-    # `celery` queue; render gets its own queue with PRO-07.
+    # Dedicated queues (issue #8): render is the heaviest CPU/RAM workload (Remotion),
+    # so it gets its own worker container that scales independently of generation.
+    task_default_queue="generation",
     task_routes={
+        "render.render": {"queue": "render"},
         "generation.generate": {"queue": "generation"},
     },
 )
