@@ -20,6 +20,7 @@ __all__ = [
     "create_job",
     "create_video",
     "ensure_user",
+    "get_job",
     "get_scenes",
     "get_video",
     "init_db",
@@ -29,6 +30,7 @@ __all__ = [
     "list_videos",
     "replace_scenes",
     "set_job_status",
+    "set_job_step",
     "set_mp4",
     "set_status",
     "set_total",
@@ -371,3 +373,42 @@ def set_job_status(job_id: str, status: str, error: str | None = None) -> None:
             job.error = error
         s.add(job)
         s.commit()  # updated_at bumped by onupdate=func.now()
+
+
+def set_job_step(job_id: str, step: str) -> None:
+    """Record the worker's current step (generation: plan/outline/fill/tts; render:
+    packing/render — issue #9). Best-effort no-op if the job vanished, same as
+    `set_job_status`: progress reporting never blocks the pipeline."""
+    with Session(engine) as s:
+        job = s.get(Job, uuid.UUID(job_id))
+        if job is None:
+            return
+        job.step = step
+        s.add(job)
+        s.commit()
+
+
+def _job_to_dict(j: Job) -> dict[str, Any]:
+    return {
+        "id": str(j.id),
+        "video_id": j.video_id,
+        "type": j.type,
+        "status": j.status,
+        "step": j.step,
+        "error": j.error,
+    }
+
+
+def get_job(job_id: str, user_id: str) -> dict[str, Any] | None:
+    """Fetch a job scoped to its video's owner (`jobs` has no `user_id` of its own —
+    join through `videos`). Returns None for an unknown id, a malformed UUID, or a
+    job owned by another user (no existence leak — same pattern as `get_video`)."""
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        return None
+    with Session(engine) as s:
+        job = s.exec(
+            select(Job).join(Video).where(Job.id == job_uuid, Video.user_id == uuid.UUID(user_id))
+        ).one_or_none()
+        return _job_to_dict(job) if job else None

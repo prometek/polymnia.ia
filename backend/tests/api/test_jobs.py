@@ -5,6 +5,8 @@ instead of running in the request thread, and a `jobs` row must track the work
 through its lifecycle (queued -> running -> done/error).
 """
 
+import subprocess
+import uuid
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -17,6 +19,8 @@ from starlette.testclient import TestClient
 from tasks import generation
 from tasks import render as render_jobs
 
+import pack_render
+
 
 def _jobs_for(video_id: str) -> list[dict[str, Any]]:
     with engine.begin() as conn:
@@ -24,6 +28,21 @@ def _jobs_for(video_id: str) -> list[dict[str, Any]]:
             text("SELECT type, status, error FROM jobs WHERE video_id = :v"), {"v": video_id}
         ).mappings()
         return [dict(r) for r in rows]
+
+
+def _job_row(video_id: str) -> dict[str, Any]:
+    """Full row (incl. `id`/`step`) for a video's (single) job — used by step-progression
+    and endpoint tests that need more than `_jobs_for`'s type/status/error subset."""
+    with engine.begin() as conn:
+        row = (
+            conn.execute(
+                text("SELECT id, type, status, step, error FROM jobs WHERE video_id = :v"),
+                {"v": video_id},
+            )
+            .mappings()
+            .one()
+        )
+        return dict(row)
 
 
 def _scene() -> dict[str, Any]:
@@ -130,10 +149,11 @@ def test_generation_routes_to_its_own_queue() -> None:
     assert route["queue"].name == "generation"
 
 
-def test_render_stays_on_default_queue() -> None:
-    """Render is unrouted for now → default `celery` queue (own queue = PRO-07)."""
+def test_render_routes_to_its_own_queue() -> None:
+    """render.render lands on the dedicated `render` queue (issue #8): the
+    containerized render worker (`celery ... -Q render`) scales independently."""
     route = celery_app.amqp.router.route({}, render_jobs.render_task.name)
-    assert route["queue"].name == "celery"
+    assert route["queue"].name == "render"
 
 
 # --- task lifecycle (executed inline via Celery eager) ----------------------
@@ -162,7 +182,9 @@ def test_generation_task_drives_job_to_done(
     as_user(uid)
 
     # Stub the heavy pipeline: mark the video ready without calling the real LLM/TTS.
-    def fake_run(pid: str, input_text: str, kit: dict[str, Any]) -> None:
+    # NB: run_generation's 4th positional arg is `job_id` (issue #9, worker step
+    # reporting) — the stub's signature must match the real call site.
+    def fake_run(pid: str, input_text: str, kit: dict[str, Any], job_id: str) -> None:
         db.set_status(pid, "ready")
 
     monkeypatch.setattr(service, "run_generation", fake_run)
@@ -173,3 +195,216 @@ def test_generation_task_drives_job_to_done(
 
     # eager task ran inline: queued -> running -> done
     assert _jobs_for(pid) == [{"type": "generation", "status": "done", "error": None}]
+
+
+def test_render_task_drives_job_to_done(
+    client: TestClient,
+    as_user: Callable[[str], None],
+    monkeypatch: pytest.MonkeyPatch,
+    eager_celery: None,
+) -> None:
+    """Analogous to test_generation_task_drives_job_to_done, for the render task —
+    same 4-arg (..., job_id) call-site shape (issue #9)."""
+    uid = db.ensure_user("a@test.local")
+    version_id = db.upsert_brand_kit({"id": "kit-a", "name": "A"}, uid)
+    vid = db.uuid.uuid4().hex[:12]
+    db.create_video(vid, uid, version_id, "v")
+    db.replace_scenes(vid, [_scene()])
+    as_user(uid)
+
+    def fake_run(pid: str, scenes: list[dict[str, Any]], kit: dict[str, Any], job_id: str) -> None:
+        db.set_status(pid, "ready")
+
+    monkeypatch.setattr(service, "run_render", fake_run)
+
+    resp = client.post(f"/projects/{vid}/render")
+    assert resp.status_code == 202
+
+    # eager task ran inline: queued -> running -> done
+    assert _jobs_for(vid) == [{"type": "render", "status": "done", "error": None}]
+
+
+# --- GET /jobs/{id} (issue #9 / PRO-08) -------------------------------------
+
+
+def test_job_status_returns_full_shape(client: TestClient, as_user: Callable[[str], None]) -> None:
+    uid = db.ensure_user("a@test.local")
+    version_id = db.upsert_brand_kit({"id": "kit-a", "name": "A"}, uid)
+    vid = db.uuid.uuid4().hex[:12]
+    db.create_video(vid, uid, version_id, "v")
+    as_user(uid)
+
+    job_id = db.create_job(vid, "generation")
+    db.set_job_status(job_id, "running")
+    db.set_job_step(job_id, "outline")
+
+    resp = client.get(f"/jobs/{job_id}")
+    assert resp.status_code == 200
+    # Exact shape: {id, type, status, step, video_id, error} — no extra leakage
+    # (e.g. no raw user_id, no created_at/updated_at).
+    assert resp.json() == {
+        "id": job_id,
+        "type": "generation",
+        "status": "running",
+        "step": "outline",
+        "video_id": vid,
+        "error": None,
+    }
+
+
+def test_job_status_404_unknown_id(client: TestClient, as_user: Callable[[str], None]) -> None:
+    uid = db.ensure_user("a@test.local")
+    as_user(uid)
+
+    resp = client.get(f"/jobs/{uuid.uuid4()}")
+    assert resp.status_code == 404
+
+
+def test_job_status_404_malformed_id(client: TestClient, as_user: Callable[[str], None]) -> None:
+    """A non-UUID path param must 404, not 500 (no unhandled parsing exception)."""
+    uid = db.ensure_user("a@test.local")
+    as_user(uid)
+
+    resp = client.get("/jobs/not-a-valid-uuid")
+    assert resp.status_code == 404
+
+
+def test_job_status_404_other_users_job(client: TestClient, as_user: Callable[[str], None]) -> None:
+    """A job that exists but belongs to another user must 404 — same response as an
+    unknown id (no existence leak)."""
+    owner_id = db.ensure_user("owner@test.local")
+    owner_version_id = db.upsert_brand_kit({"id": "kit-owner", "name": "Owner"}, owner_id)
+    owner_vid = db.uuid.uuid4().hex[:12]
+    db.create_video(owner_vid, owner_id, owner_version_id, "v")
+    other_job_id = db.create_job(owner_vid, "generation")
+
+    requester_id = db.ensure_user("requester@test.local")
+    as_user(requester_id)
+
+    resp = client.get(f"/jobs/{other_job_id}")
+    assert resp.status_code == 404
+
+
+# --- Step progression end-to-end (issue #9) ---------------------------------
+
+
+def test_generation_step_progresses_through_pipeline(
+    client: TestClient,
+    as_user: Callable[[str], None],
+    monkeypatch: pytest.MonkeyPatch,
+    eager_celery: None,
+) -> None:
+    """Drives the real worker path (tasks.generation.generate_task -> service.run_generation
+    -> service.generate) with only the external LLM/TTS boundaries stubbed, and asserts
+    `jobs.step` advances through plan -> outline -> fill -> tts, in order."""
+    uid = db.ensure_user("a@test.local")
+    db.upsert_brand_kit({"id": "kit-a", "name": "A"}, uid)
+    as_user(uid)
+
+    def fake_generate_plan(source_text: str) -> dict[str, Any]:
+        return {"topic": source_text}
+
+    def fake_build_outline(plan: dict[str, Any], kicker_style: str) -> dict[str, Any]:
+        return {"scenes": [{"order": 0, "type": "statement"}]}
+
+    def fake_fill_scene(
+        scene: dict[str, Any], brand_kit: dict[str, Any], instruction: str | None = None
+    ) -> dict[str, Any]:
+        return {**scene, "composition": "centered", "props": {}, "asset_refs": []}
+
+    def fake_voiceover_scene(scene: dict[str, Any], audio_dir: str) -> dict[str, Any]:
+        return {**scene, "timing": {"duration_s": 1.0, "audio_path": "audio/s0.wav"}}
+
+    monkeypatch.setattr(service.generate_plan, "generate_plan", fake_generate_plan)
+    monkeypatch.setattr(service.outline, "build_outline", fake_build_outline)
+    monkeypatch.setattr(service.fill, "fill_scene", fake_fill_scene)
+    monkeypatch.setattr(service.tts, "voiceover_scene", fake_voiceover_scene)
+
+    seen_steps: list[str] = []
+    real_set_job_step = db.set_job_step
+
+    def tracking_set_job_step(job_id: str, step: str) -> None:
+        seen_steps.append(step)
+        real_set_job_step(job_id, step)
+
+    monkeypatch.setattr(db, "set_job_step", tracking_set_job_step)
+
+    resp = client.post("/projects", json={"input_text": "hello", "brand_kit_id": "kit-a"})
+    assert resp.status_code == 202
+    pid = resp.json()["id"]
+
+    assert seen_steps == ["plan", "outline", "fill", "tts"]
+
+    row = _job_row(pid)
+    assert row["status"] == "done"
+    assert row["step"] == "tts"  # last step written, still visible after completion
+    assert db.get_video(pid, uid) is not None
+    assert db.get_video(pid, uid)["status"] == "ready"
+
+
+def test_render_step_progresses_through_pipeline(
+    client: TestClient,
+    as_user: Callable[[str], None],
+    monkeypatch: pytest.MonkeyPatch,
+    eager_celery: None,
+    tmp_path: Any,
+) -> None:
+    """Drives the real worker path (tasks.render.render_task -> service.run_render ->
+    service.render_project) with only the Remotion subprocess stubbed, and asserts
+    `jobs.step` advances through packing -> render, in order."""
+    uid = db.ensure_user("a@test.local")
+    version_id = db.upsert_brand_kit({"id": "kit-a", "name": "A"}, uid)
+    vid = db.uuid.uuid4().hex[:12]
+    db.create_video(vid, uid, version_id, "v")
+
+    audio_src = tmp_path / "s0.wav"
+    audio_src.write_bytes(b"not-a-real-wav")
+    scene = {
+        "order": 0,
+        "type": "statement",
+        "composition": "centered",
+        "props": {},
+        "asset_refs": [],
+        "timing": {"duration_s": 1.0, "audio_path": str(audio_src)},
+    }
+    db.replace_scenes(vid, [scene])
+    as_user(uid)
+
+    # Redirect packing output away from the real render-motor tree (POC layout keeps
+    # PUBLIC/RENDER_DIR as module attributes read at call time via a local `from
+    # pack_render import ...`, so monkeypatching the module is enough).
+    public_dir = tmp_path / "public"
+    render_dir = tmp_path / "render"
+    render_dir.mkdir()
+    monkeypatch.setattr(pack_render, "PUBLIC", str(public_dir))
+    monkeypatch.setattr(pack_render, "RENDER_DIR", str(render_dir))
+
+    subprocess_calls: list[list[str]] = []
+
+    def fake_subprocess_run(
+        cmd: list[str], cwd: str | None = None, check: bool | None = None
+    ) -> subprocess.CompletedProcess[bytes]:
+        subprocess_calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(service.subprocess, "run", fake_subprocess_run)
+
+    seen_steps: list[str] = []
+    real_set_job_step = db.set_job_step
+
+    def tracking_set_job_step(job_id: str, step: str) -> None:
+        seen_steps.append(step)
+        real_set_job_step(job_id, step)
+
+    monkeypatch.setattr(db, "set_job_step", tracking_set_job_step)
+
+    resp = client.post(f"/projects/{vid}/render")
+    assert resp.status_code == 202
+
+    assert seen_steps == ["packing", "render"]
+    assert subprocess_calls and subprocess_calls[0][:3] == ["npx", "remotion", "render"]
+
+    row = _job_row(vid)
+    assert row["status"] == "done"
+    assert row["step"] == "render"  # last step written, still visible after completion
+    assert db.get_video(vid, uid)["status"] == "ready"

@@ -22,7 +22,7 @@ def render_task(job_id: str, pid: str, scenes: list[Scene], kit: Kit) -> None:
     """
     db.set_job_status(job_id, "running")
     try:
-        service.run_render(pid, scenes, kit)
+        service.run_render(pid, scenes, kit, job_id)
     except Exception as exc:
         db.set_job_status(job_id, "error", error=str(exc))
         logger.exception("render job %s failed for project %s", job_id, pid)

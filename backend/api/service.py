@@ -43,24 +43,32 @@ def _total(scenes: list[Scene]) -> float:
     return round(sum(float(s["timing"]["duration_s"]) for s in scenes), 3)
 
 
-def generate(pid: str, input_text: str, kit: Kit) -> tuple[list[Scene], float]:
-    """Full generation for a project: plan -> outline -> fill -> TTS + align."""
+def generate(pid: str, input_text: str, kit: Kit, job_id: str) -> tuple[list[Scene], float]:
+    """Full generation for a project: plan -> outline -> fill -> TTS + align.
+
+    Reports progress on `job_id` at each stage boundary (issue #9): plan/outline/fill/
+    tts. Step writes are plain `db` calls — this stays free of the Celery/queue layer.
+    """
+    db.set_job_step(job_id, "plan")
     plan = generate_plan.generate_plan(input_text)
+    db.set_job_step(job_id, "outline")
     scenes_outline = outline.build_outline(plan, kit.get("kicker_style", "thematic"))["scenes"]
+    db.set_job_step(job_id, "fill")
     filled = [fill.fill_scene(s, kit) for s in scenes_outline]
+    db.set_job_step(job_id, "tts")
     audio_dir = _audio_dir(pid)
     scenes = [tts.voiceover_scene(s, audio_dir) for s in filled]
     return scenes, _total(scenes)
 
 
-def run_generation(pid: str, input_text: str, kit: Kit) -> None:
+def run_generation(pid: str, input_text: str, kit: Kit, job_id: str) -> None:
     """Queue job: generate the whole project and persist it with a status transition.
 
     Owns the *video* status (generating -> ready/error). Re-raises after marking the
     video errored so the caller (Celery task) can fail the job and the broker retry.
     """
     try:
-        scenes, total = generate(pid, input_text, kit)
+        scenes, total = generate(pid, input_text, kit, job_id)
         db.replace_scenes(pid, scenes)
         db.set_total(pid, total)
         db.set_status(pid, "ready")
@@ -70,14 +78,14 @@ def run_generation(pid: str, input_text: str, kit: Kit) -> None:
         raise
 
 
-def run_render(pid: str, scenes: list[Scene], kit: Kit) -> None:
+def run_render(pid: str, scenes: list[Scene], kit: Kit, job_id: str) -> None:
     """Queue job: render the MP4 and persist its path with a status transition.
 
     Owns the *video* status (rendering -> ready/error). Re-raises after marking the
     video errored so the caller (Celery task) can fail the job and the broker retry.
     """
     try:
-        mp4 = render_project(pid, scenes, kit)
+        mp4 = render_project(pid, scenes, kit, job_id)
         db.set_mp4(pid, mp4)
         db.set_status(pid, "ready")
     except Exception:
@@ -128,8 +136,12 @@ def edit_direct(
     return scenes[idx]
 
 
-def render_project(pid: str, scenes: list[Scene], kit: Kit) -> str:
-    """Build a project-scoped render-input and render the full MP4. Returns its path."""
+def render_project(pid: str, scenes: list[Scene], kit: Kit, job_id: str) -> str:
+    """Build a project-scoped render-input and render the full MP4. Returns its path.
+
+    Reports progress on `job_id` (issue #9): 'packing' while building render-input and
+    copying audio, 'render' for the Remotion subprocess itself.
+    """
     from pack_render import (
         PUBLIC,
         RENDER_DIR,
@@ -140,6 +152,7 @@ def render_project(pid: str, scenes: list[Scene], kit: Kit) -> str:
         resolve_content,
     )
 
+    db.set_job_step(job_id, "packing")
     pub = os.path.join(PUBLIC, f"proj-{pid}")
     os.makedirs(pub, exist_ok=True)
     emojis = emoji_map(kit)
@@ -173,6 +186,7 @@ def render_project(pid: str, scenes: list[Scene], kit: Kit) -> str:
     with open(props_path, "w", encoding="utf-8") as f:
         json.dump(render_input, f, ensure_ascii=False, indent=2)
 
+    db.set_job_step(job_id, "render")
     subprocess.run(
         [
             "npx",
