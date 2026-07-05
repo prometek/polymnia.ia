@@ -120,6 +120,22 @@ def test_render_no_scenes_does_not_enqueue(
     assert calls == []
 
 
+# --- queue routing (issue #7: autonomous generation worker) -----------------
+
+
+def test_generation_routes_to_its_own_queue() -> None:
+    """generation.generate lands on the dedicated `generation` queue so its worker
+    (`celery ... -Q generation`) scales independently of the API and render."""
+    route = celery_app.amqp.router.route({}, generation.generate_task.name)
+    assert route["queue"].name == "generation"
+
+
+def test_render_stays_on_default_queue() -> None:
+    """Render is unrouted for now → default `celery` queue (own queue = PRO-07)."""
+    route = celery_app.amqp.router.route({}, render_jobs.render_task.name)
+    assert route["queue"].name == "celery"
+
+
 # --- task lifecycle (executed inline via Celery eager) ----------------------
 
 
