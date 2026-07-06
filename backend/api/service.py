@@ -9,8 +9,10 @@ its own audio dir and its own render-input + MP4, so projects don't collide.
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 from . import db
@@ -63,10 +65,16 @@ def _voiceover_and_store(pid: str, scene: Scene) -> Scene:
     """
     voiced = tts.voiceover_scene(scene, _audio_dir(pid))
     staged_path = voiced["timing"]["audio_path"]
-    with open(staged_path, "rb") as f:
-        data = f.read()
     key = _audio_key(pid, voiced["order"])
-    get_storage().put(key, data)
+    try:
+        with open(staged_path, "rb") as f:
+            data = f.read()
+        get_storage().put(key, data)
+    finally:
+        # The scratch WAV is not the artefact of record once promotion is attempted
+        # (issue #13) — remove it so it doesn't accumulate on whichever worker ran
+        # TTS, whether or not the put above succeeded (a retry re-runs TTS anyway).
+        Path(staged_path).unlink(missing_ok=True)
     voiced["timing"]["audio_path"] = key
     return voiced
 
@@ -164,12 +172,34 @@ def edit_direct(
     return scenes[idx]
 
 
+def _cleanup_render_scratch(pub: str, props_path: str, rendered_path: str) -> None:
+    """Remove this render's local scratch (issue #13). None of these are the artefact
+    of record: the durable MP4 already lives in Storage by the time this runs (or the
+    render/promotion failed, in which case there's nothing worth keeping either way).
+    Left on disk, they'd accumulate unboundedly on the render worker across renders —
+    the audio copies materialized under `public/proj-{pid}/` for Remotion's
+    `staticFile()` reads, the packed `render-input-{pid}.json`, and Remotion's own
+    local MP4 output.
+
+    Guarded per-path (`ignore_errors`/`missing_ok`) rather than one try/except around
+    the lot, so a partial render (e.g. the subprocess failed before ever writing the
+    MP4) can't turn cleanup itself into a crash.
+    """
+    shutil.rmtree(pub, ignore_errors=True)
+    Path(props_path).unlink(missing_ok=True)
+    Path(rendered_path).unlink(missing_ok=True)
+
+
 def render_project(pid: str, scenes: list[Scene], kit: Kit, job_id: str) -> str:
     """Build a project-scoped render-input and render the full MP4. Returns its
     Storage key (issue #12) — not a filesystem path.
 
     Reports progress on `job_id` (issue #9): 'packing' while building render-input and
     copying audio, 'render' for the Remotion subprocess itself.
+
+    All local scratch this creates (materialized audio, render-input JSON, Remotion's
+    own MP4 output) is removed in `finally` once promotion into Storage is attempted
+    (issue #13) — the render worker must not depend on its local disk for output.
     """
     from pack_render import (
         PUBLIC,
@@ -186,57 +216,60 @@ def render_project(pid: str, scenes: list[Scene], kit: Kit, job_id: str) -> str:
     pub = os.path.join(PUBLIC, f"proj-{pid}")
     os.makedirs(pub, exist_ok=True)
     emojis = emoji_map(kit)
-
-    out_scenes = []
-    for s in scenes:
-        key = s["timing"]["audio_path"]  # storage key, set by _voiceover_and_store
-        name = os.path.basename(key)
-        # Remotion is a headless subprocess reading from render-motor/public/ on local
-        # disk (its `staticFile()` mechanism) — this materialization stays local
-        # regardless of backend; the audio itself is only ever read via Storage.
-        with open(os.path.join(pub, name), "wb") as f:
-            f.write(storage.get(key))
-        out_scenes.append(
-            {
-                "type": s["type"],
-                "composition": s.get("composition", "centered"),
-                "durationS": s["timing"]["duration_s"],
-                "audio": f"proj-{pid}/{name}",  # staticFile path under public/
-                "props": resolve_content(s.get("props", {}), emojis),
-            }
-        )
-
-    cosmetic = render_cosmetic(kit)
-    cosmetic["background"] = render_background(kit)
-    render_input = {
-        "styleId": kit.get("visualStyle", "tech"),
-        "cosmetic": cosmetic,
-        "logo": copy_logo(kit),
-        "scenes": out_scenes,
-    }
     props_path = os.path.join(RENDER_DIR, f"render-input-{pid}.json")
-    with open(props_path, "w", encoding="utf-8") as f:
-        json.dump(render_input, f, ensure_ascii=False, indent=2)
-
-    db.set_job_step(job_id, "render")
-    subprocess.run(
-        [
-            "npx",
-            "remotion",
-            "render",
-            "src/index.ts",
-            "Polymnia",
-            f"out/{pid}.mp4",
-            f"--props=./render-input-{pid}.json",
-        ],
-        cwd=RENDER_DIR,
-        check=True,
-    )
-    # Remotion writes the MP4 to its own local out/ dir (subprocess, can't target S3
-    # directly) — this is the one place that promotes that output into Storage.
     rendered_path = os.path.join(RENDER_DIR, "out", f"{pid}.mp4")
-    with open(rendered_path, "rb") as f:
-        mp4_data = f.read()
-    video_key = _video_key(pid)
-    storage.put(video_key, mp4_data)
-    return video_key
+
+    try:
+        out_scenes = []
+        for s in scenes:
+            key = s["timing"]["audio_path"]  # storage key, set by _voiceover_and_store
+            name = os.path.basename(key)
+            # Remotion is a headless subprocess reading from render-motor/public/ on local
+            # disk (its `staticFile()` mechanism) — this materialization stays local
+            # regardless of backend; the audio itself is only ever read via Storage.
+            with open(os.path.join(pub, name), "wb") as f:
+                f.write(storage.get(key))
+            out_scenes.append(
+                {
+                    "type": s["type"],
+                    "composition": s.get("composition", "centered"),
+                    "durationS": s["timing"]["duration_s"],
+                    "audio": f"proj-{pid}/{name}",  # staticFile path under public/
+                    "props": resolve_content(s.get("props", {}), emojis),
+                }
+            )
+
+        cosmetic = render_cosmetic(kit)
+        cosmetic["background"] = render_background(kit)
+        render_input = {
+            "styleId": kit.get("visualStyle", "tech"),
+            "cosmetic": cosmetic,
+            "logo": copy_logo(kit),
+            "scenes": out_scenes,
+        }
+        with open(props_path, "w", encoding="utf-8") as f:
+            json.dump(render_input, f, ensure_ascii=False, indent=2)
+
+        db.set_job_step(job_id, "render")
+        subprocess.run(
+            [
+                "npx",
+                "remotion",
+                "render",
+                "src/index.ts",
+                "Polymnia",
+                f"out/{pid}.mp4",
+                f"--props=./render-input-{pid}.json",
+            ],
+            cwd=RENDER_DIR,
+            check=True,
+        )
+        # Remotion writes the MP4 to its own local out/ dir (subprocess, can't target S3
+        # directly) — this is the one place that promotes that output into Storage.
+        with open(rendered_path, "rb") as f:
+            mp4_data = f.read()
+        video_key = _video_key(pid)
+        storage.put(video_key, mp4_data)
+        return video_key
+    finally:
+        _cleanup_render_scratch(pub, props_path, rendered_path)
