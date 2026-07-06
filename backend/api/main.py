@@ -30,7 +30,7 @@ from pydantic import BaseModel
 from tasks import generation
 from tasks import render as render_jobs
 
-from . import db, job_events, service
+from . import db, job_events, queue_metrics, service
 
 DEV_EMAIL = "dev@polymnia.local"
 
@@ -231,6 +231,19 @@ def download_video(video: Video) -> FileResponse:
     if not video["mp4_path"] or not os.path.exists(video["mp4_path"]):
         raise HTTPException(404, "no rendered video yet")
     return FileResponse(video["mp4_path"], media_type="video/mp4", filename=f"{video['id']}.mp4")
+
+
+# --- Metrics -----------------------------------------------------------------
+
+
+@app.get("/metrics/queues")
+def queue_metrics_endpoint() -> dict[str, int]:
+    """Queue-depth metric (issue #11 / PRO-10): pending job count per Celery queue,
+    for later consumption by dashboards/alerts (PRO-23) — not user/tenant data
+    (it's an operational signal about the queue, not a project), so unlike the
+    endpoints below it isn't scoped behind `UserId`/ownership.
+    """
+    return queue_metrics.queue_depths()
 
 
 # --- Jobs --------------------------------------------------------------------

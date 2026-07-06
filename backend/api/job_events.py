@@ -29,8 +29,12 @@ from .redis_config import REDIS_URL
 logger = logging.getLogger("polymnia.job_events")
 
 # Terminal job statuses (see api/models.py Job docstring: queued -> running ->
-# done/error) — once reached, no further event will ever be published for that job.
-_TERMINAL_STATUSES = frozenset({"done", "error"})
+# retrying -> done/error/dead) — once reached, no further event will ever be
+# published for that job. `dead` (issue #11, DLQ: bounded retries exhausted) is
+# terminal exactly like `error`. `retrying` (issue #11) is deliberately NOT here: a
+# failed attempt with retries still pending must keep the stream open — the job may
+# yet recover (`done`) or exhaust its budget (`dead`), so it isn't terminal.
+_TERMINAL_STATUSES = frozenset({"done", "error", "dead"})
 
 _CONNECT_TIMEOUT_S = 2.0
 # generation/render steps can be minutes apart: without a heartbeat, an idle

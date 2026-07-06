@@ -134,8 +134,13 @@ class Video(SQLModel, table=True):
 class Job(SQLModel, table=True):
     """Durable work item for the queue (issue #6): decouples generation/render from
     the API process. `type` says what the worker runs; `status` tracks its lifecycle
-    (queued -> running -> done/error), separate from the video's own status vocabulary.
-    Advanced retries/DLQ land in PRO-10; the read endpoint in PRO-08.
+    (queued -> running -> retrying -> done/error/dead), separate from the video's
+    own status vocabulary. `retrying` and `dead` are issue #11 / PRO-10: a failed
+    attempt lands on the non-terminal `retrying` (with that attempt's `error`) while
+    a bounded Celery retry is still pending, so `GET /jobs/{id}` and the SSE stream
+    (issue #10) don't report a false terminal `error` mid-backoff; once retries are
+    exhausted, `dead` is the dead-letter queue proper — `error`/`step` stay populated
+    so it's inspectable via the read endpoint (PRO-08).
     """
 
     __tablename__ = "jobs"
