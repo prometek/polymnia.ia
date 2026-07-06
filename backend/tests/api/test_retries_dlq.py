@@ -10,6 +10,16 @@ Acceptance criteria under test:
   3. A queue-depth metric is exposed per Celery queue (`GET /metrics/queues`).
   4. `dead` is a terminal status for the SSE job stream, exactly like
      `done`/`error` -- the stream stops, it doesn't hang waiting for more.
+  5. Fix cycle 1: an intermediate failed attempt writes the non-terminal
+     `retrying` status (not `error`) -- the SSE stream must keep listening
+     through it, not treat it as terminal -- and a job that then recovers
+     within its budget must report `status=done` with `error=None` (no stale
+     message from an abandoned attempt), including through the actual
+     `GET /jobs/{id}` read path, not just the DB row.
+  6. Fix cycle 1: `DeadLetterTask._extract_job_id` must accept `job_id` as
+     either the first positional arg or a `job_id` kwarg, and raise an
+     explicit `ValueError` (not an opaque `IndexError`/`KeyError`) when
+     neither is present.
 
 Retry-exhaustion is exercised via Celery's own eager-execution recursion
 (`task_always_eager` + `task_eager_propagates=False`), not a live broker: with
@@ -35,6 +45,7 @@ from sqlalchemy import text
 from starlette.testclient import TestClient
 from tasks import generation
 from tasks import render as render_jobs
+from tasks.base import DeadLetterTask
 
 
 def _job_row(video_id: str) -> dict[str, Any]:
@@ -521,3 +532,224 @@ def test_stream_endpoint_closes_when_job_is_already_dead(
     assert len(frames) == 1
     assert frames[0]["status"] == "dead"
     assert frames[0]["error"] == "exhausted retries"
+
+
+# --- 5. `retrying` is NON-terminal for the SSE stream (fix cycle 1) -----------
+
+
+def test_retrying_is_not_in_the_terminal_statuses_set() -> None:
+    """Direct guard against a regression re-adding `retrying` to the terminal
+    set: it's the whole point of the fix (see module docstring, point 5) that
+    an intermediate failed attempt must not stop the stream."""
+    assert "retrying" not in job_events._TERMINAL_STATUSES
+    assert {"done", "error", "dead"} == job_events._TERMINAL_STATUSES
+
+
+def test_event_stream_treats_retrying_as_non_terminal_and_keeps_streaming() -> None:
+    """Unit-level: `job_events.event_stream` must NOT close after a `retrying`
+    frame -- it should keep relaying until an actual terminal status (`done`
+    here) arrives. This is the direct counterpart of
+    `test_event_stream_treats_dead_as_terminal_and_stops` above, proving
+    `retrying` behaves oppositely."""
+    import asyncio
+    import json
+    import queue as queue_mod
+
+    q: queue_mod.Queue[str] = queue_mod.Queue()
+
+    class _Pub:
+        async def subscribe(self, channel: str) -> None:
+            pass
+
+        async def get_message(
+            self, ignore_subscribe_messages: bool = True, timeout: float = 15.0
+        ) -> dict[str, Any] | None:
+            def _blocking_get() -> str | None:
+                try:
+                    return q.get(timeout=timeout)
+                except queue_mod.Empty:
+                    return None
+
+            raw = await asyncio.to_thread(_blocking_get)
+            return None if raw is None else {"type": "message", "data": raw}
+
+        async def unsubscribe(self, channel: str) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            pass
+
+    class _Client:
+        def pubsub(self) -> _Pub:
+            return _Pub()
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(job_events.aioredis, "from_url", lambda *a, **kw: _Client())
+    try:
+        q.put(
+            json.dumps(
+                {"id": "job-1", "status": "retrying", "step": "tts", "error": "transient hiccup"}
+            )
+        )
+        q.put(json.dumps({"id": "job-1", "status": "done", "step": "tts", "error": None}))
+
+        async def _collect() -> list[bytes]:
+            job = {"id": "job-1", "status": "running", "step": "tts"}
+            return [chunk async for chunk in job_events.event_stream("job-1", lambda: job)]
+
+        chunks = asyncio.run(_collect())
+    finally:
+        monkeypatch.undo()
+
+    payloads = []
+    for chunk in chunks:
+        for line in chunk.decode().splitlines():
+            if line.startswith("data: "):
+                payloads.append(json.loads(line.removeprefix("data: ")))
+    # The stream survived the `retrying` frame (didn't stop there) and only
+    # closed after `done` -- if `retrying` were (wrongly) terminal, `_collect`
+    # would have returned after just ["running", "retrying"] and never picked
+    # up the queued "done" message at all.
+    assert [p["status"] for p in payloads] == ["running", "retrying", "done"]
+
+
+def test_stream_endpoint_keeps_streaming_through_an_intermediate_retrying_attempt(
+    client: TestClient, as_user: Callable[[str], None], fake_pubsub: _FakeBus
+) -> None:
+    """End-to-end: a client connected to `GET /jobs/{id}/stream` while the
+    worker publishes a `retrying` transition (a failed attempt with retries
+    still pending) must keep receiving frames past it -- the connection must
+    only close once the job actually reaches a terminal status (`done` here),
+    proving the SSE feature (issue #10) isn't broken by an in-flight retry
+    (issue #11 fix cycle 1)."""
+    import threading
+
+    uid = db.ensure_user("stream-retrying@test.local")
+    version_id = db.upsert_brand_kit({"id": "kit-retrying", "name": "R"}, uid)
+    vid = db.uuid.uuid4().hex[:12]
+    db.create_video(vid, uid, version_id, "v")
+    job_id = db.create_job(vid, "generation")
+    as_user(uid)
+
+    db.set_job_status(job_id, "running")
+
+    result: dict[str, Any] = {}
+
+    def do_request() -> None:
+        result["resp"] = client.get(f"/jobs/{job_id}/stream")
+
+    req_thread = threading.Thread(target=do_request)
+    req_thread.start()
+    assert fake_pubsub.subscribed.wait(timeout=5), "SSE endpoint never subscribed"
+
+    # A failed attempt, still within budget -- non-terminal.
+    db.set_job_status(job_id, "retrying", error="transient hiccup")
+    # The request must still be open at this point (retrying didn't close it).
+    req_thread.join(timeout=0.5)
+    assert req_thread.is_alive(), "stream closed on a non-terminal `retrying` status"
+
+    # The job then recovers.
+    db.set_job_status(job_id, "done")
+
+    req_thread.join(timeout=5)
+    assert not req_thread.is_alive()
+    resp = result["resp"]
+
+    frames = []
+    for block in resp.text.strip("\n").split("\n\n"):
+        for line in block.splitlines():
+            if line.startswith("data: "):
+                import json as _json
+
+                frames.append(_json.loads(line.removeprefix("data: ")))
+
+    assert [f["status"] for f in frames] == ["running", "retrying", "done"]
+    assert frames[-1]["error"] is None  # cleared on the recovering `done` transition
+
+
+# --- 6. recovered job reports done + error=None via the real read path --------
+
+
+def test_recovered_job_reports_done_and_no_error_via_job_status_endpoint(
+    client: TestClient,
+    as_user: Callable[[str], None],
+    monkeypatch: pytest.MonkeyPatch,
+    eager_celery_retrying: None,
+) -> None:
+    """End-to-end: complementary to
+    `test_generation_task_recovers_and_does_not_go_dead_if_it_succeeds_within_the_budget`
+    (which checks the DB row directly) -- the same guarantee must hold through
+    the actual client-facing path, `GET /jobs/{id}` (issue #9): a job that
+    fails once (writing `retrying` + an error) then recovers must report
+    `status=done` AND `error=None`, not a stale message from the abandoned
+    attempt."""
+    uid = db.ensure_user("recovers-via-endpoint@test.local")
+    db.upsert_brand_kit({"id": "kit-recover", "name": "K"}, uid)
+    as_user(uid)
+
+    attempts = {"n": 0}
+
+    def fails_once_then_succeeds(
+        pid: str, input_text: str, kit: dict[str, Any], job_id: str
+    ) -> None:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise RuntimeError("transient mistral hiccup")
+        db.set_status(pid, "ready")
+
+    monkeypatch.setattr("api.service.run_generation", fails_once_then_succeeds)
+
+    resp = client.post("/projects", json={"input_text": "hello", "brand_kit_id": "kit-recover"})
+    pid = resp.json()["id"]
+    job_id = _job_row(pid)["id"]
+
+    job_resp = client.get(f"/jobs/{job_id}")
+    assert job_resp.status_code == 200
+    body = job_resp.json()
+    assert body["status"] == "done"
+    assert body["error"] is None
+
+
+# --- 7. `DeadLetterTask._extract_job_id` guard (fix cycle 1) ------------------
+
+
+def test_on_failure_reaches_the_dlq_for_a_kwargs_only_job_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A task invoked kwargs-only (e.g. `.delay(job_id=...)`, legal Celery
+    usage even if every task in this codebase currently uses positional args)
+    must still reach the DLQ transition -- `_extract_job_id` must not assume
+    `args[0]` unconditionally."""
+    uid = db.ensure_user("dlq-kwargs@test.local")
+    version_id = db.upsert_brand_kit({"id": "kit-dlq-kwargs", "name": "K"}, uid)
+    vid = db.uuid.uuid4().hex[:12]
+    db.create_video(vid, uid, version_id, "v")
+    job_id = db.create_job(vid, "generation")
+
+    task = DeadLetterTask()
+    task.on_failure(
+        RuntimeError("boom"),
+        task_id="task-1",
+        args=(),
+        kwargs={"job_id": job_id},
+        einfo=None,
+    )
+
+    job = db.get_job(job_id, uid)
+    assert job is not None
+    assert job["status"] == "dead"
+    assert job["error"] == "boom"
+
+
+def test_on_failure_raises_explicit_error_when_job_id_is_missing() -> None:
+    """Misconfiguration (neither a positional nor a `job_id` kwarg) must fail
+    loudly with an actionable `ValueError`, not an opaque `IndexError`/
+    `KeyError` that would otherwise silently skip the DLQ transition and leave
+    the job stuck on its last transient status forever."""
+    task = DeadLetterTask()
+
+    with pytest.raises(ValueError, match="no job_id found"):
+        task.on_failure(RuntimeError("boom"), task_id="task-1", args=(), kwargs={}, einfo=None)
