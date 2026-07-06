@@ -10,7 +10,9 @@ artefact (scene audio WAV, rendered MP4) goes through, backed by `LocalStorage`
 """
 
 import os
+import time
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from api.storage import (
@@ -238,6 +240,87 @@ def test_s3_storage_signed_url_without_cloudfront_config_raises_config_error(
     storage.put("k", b"data")
     with pytest.raises(StorageConfigError, match="CloudFront"):
         storage.signed_url("k", ttl_seconds=120)
+
+
+@pytest.mark.parametrize(
+    ("missing_kwarg", "expected_env_name"),
+    [
+        ("cloudfront_domain", "STORAGE_CLOUDFRONT_DOMAIN"),
+        ("cloudfront_key_pair_id", "STORAGE_CLOUDFRONT_KEY_PAIR_ID"),
+        ("cloudfront_private_key_path", "STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH"),
+    ],
+)
+def test_s3_storage_signed_url_with_partial_cloudfront_config_names_the_missing_var(
+    s3_bucket: str,
+    cloudfront_private_key_path: str,
+    missing_kwarg: str,
+    expected_env_name: str,
+) -> None:
+    """Even when only *one* of the three CloudFront settings is missing (not all
+    three), signed_url() must still fail loud and name that exact setting — a
+    partially-configured backend must never fall back to a plain S3 URL for the
+    settings it does have."""
+    kwargs: dict[str, str] = {
+        "cloudfront_domain": "d123abc.cloudfront.net",
+        "cloudfront_key_pair_id": "APKAEXAMPLEKEYPAIR",
+        "cloudfront_private_key_path": cloudfront_private_key_path,
+    }
+    del kwargs[missing_kwarg]
+    storage = S3Storage(s3_bucket, **kwargs)  # type: ignore[arg-type]
+    storage.put("k", b"data")
+    with pytest.raises(StorageConfigError, match=expected_env_name):
+        storage.signed_url("k", ttl_seconds=120)
+
+
+def test_s3_storage_signed_url_expires_reflects_the_configured_ttl(
+    s3_bucket: str, cloudfront_private_key_path: str
+) -> None:
+    """Acceptance criterion 2 (issue #14): the URL must actually expire after its
+    TTL — not merely carry an `Expires` param, but one whose value is derived from
+    `ttl_seconds`, not a constant. Decode it and check it lines up with now + ttl."""
+    storage = S3Storage(
+        s3_bucket,
+        cloudfront_domain="d123abc.cloudfront.net",
+        cloudfront_key_pair_id="APKAEXAMPLEKEYPAIR",
+        cloudfront_private_key_path=cloudfront_private_key_path,
+    )
+    storage.put("k", b"data")
+
+    before = int(time.time())
+    ttl_seconds = 120
+    signed = storage.signed_url("k", ttl_seconds=ttl_seconds)
+    after = int(time.time())
+
+    query = parse_qs(urlparse(signed).query)
+    expires = int(query["Expires"][0])
+    # Loose bound: the call itself takes negligible time, but avoid flakiness.
+    assert before + ttl_seconds <= expires <= after + ttl_seconds + 2
+    # And the expiry is genuinely in the future relative to when it was issued —
+    # a URL that were already expired on arrival would defeat the whole point.
+    assert expires > before
+
+
+def test_s3_storage_signed_url_ttl_is_not_hardcoded(
+    s3_bucket: str, cloudfront_private_key_path: str
+) -> None:
+    """Two different `ttl_seconds` must produce two different `Expires` values —
+    proves the TTL parameter is actually threaded through to the signature, not a
+    fixed expiry baked into the signer."""
+    storage = S3Storage(
+        s3_bucket,
+        cloudfront_domain="d123abc.cloudfront.net",
+        cloudfront_key_pair_id="APKAEXAMPLEKEYPAIR",
+        cloudfront_private_key_path=cloudfront_private_key_path,
+    )
+    storage.put("k", b"data")
+
+    short = storage.signed_url("k", ttl_seconds=60)
+    long = storage.signed_url("k", ttl_seconds=3600)
+
+    short_expires = int(parse_qs(urlparse(short).query)["Expires"][0])
+    long_expires = int(parse_qs(urlparse(long).query)["Expires"][0])
+    assert long_expires > short_expires
+    assert long_expires - short_expires == pytest.approx(3600 - 60, abs=2)
 
 
 def test_s3_storage_signed_url_is_a_cloudfront_url_with_ttl_and_key_pair(
