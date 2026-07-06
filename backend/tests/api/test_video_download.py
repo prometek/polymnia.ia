@@ -1,13 +1,14 @@
-"""MP4 download via Storage (issue #12).
+"""MP4 download via Storage (issue #12/#14).
 
 `GET /projects/{pid}/video` resolves `mp4_path` (a Storage key) through the
 `Storage` abstraction: LocalStorage (dev) streams the file straight off disk via
 `FileResponse` (Range support, no full-file memory load); S3Storage (prod,
-PRO-12/14) has no local filesystem representation, so the route redirects (307)
-to a signed URL instead of proxying bytes (architecture §12).
+PRO-12/14) has no local filesystem representation, so the route redirects (302)
+to a CloudFront signed URL instead of proxying bytes (architecture §12).
 """
 
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 from api import db
@@ -20,6 +21,26 @@ def _seed_project(user_id: str) -> str:
     vid = db.uuid.uuid4().hex[:12]
     db.create_video(vid, user_id, version_id, "v")
     return vid
+
+
+def _write_cloudfront_private_key(tmp_path: Path) -> str:
+    """An ephemeral RSA key pair PEM-encoded to a file — `signed_url()` reads the
+    CloudFront private key from a path (`STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH`)."""
+    pytest.importorskip(
+        "cryptography", reason="cryptography is bundled with the s3 extra (issue #14)"
+    )
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    path = tmp_path / "cloudfront_private_key.pem"
+    path.write_bytes(pem)
+    return str(path)
 
 
 def test_download_video_404_before_any_render(
@@ -76,11 +97,16 @@ def test_download_video_supports_range_requests_via_local_storage(
     assert resp.headers["content-range"] == f"bytes 10-19/{len(mp4_bytes)}"
 
 
-def test_download_video_redirects_to_signed_url_via_s3_storage(
-    client: TestClient, as_user: Callable[[str], None], monkeypatch: pytest.MonkeyPatch
+def test_download_video_redirects_to_signed_cloudfront_url_via_s3_storage(
+    client: TestClient,
+    as_user: Callable[[str], None],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    """S3-backed video: the API never proxies bytes for this backend — it redirects
-    (307) to a short-lived signed URL for the same key (architecture §12)."""
+    """S3-backed video: the API never proxies bytes for this backend — it 302s to a
+    short-lived CloudFront signed URL for the same key (issue #14 / architecture §12).
+    The bucket itself never appears in the redirect: only the CDN in front of it does.
+    """
     boto3 = pytest.importorskip(
         "boto3", reason="boto3 is an optional dependency (`uv sync --extra s3`)"
     )
@@ -92,6 +118,11 @@ def test_download_video_redirects_to_signed_url_via_s3_storage(
         monkeypatch.setenv("STORAGE_BACKEND", "s3")
         monkeypatch.setenv("STORAGE_S3_BUCKET", bucket)
         monkeypatch.setenv("STORAGE_S3_REGION", "us-east-1")
+        monkeypatch.setenv("STORAGE_CLOUDFRONT_DOMAIN", "d123abc.cloudfront.net")
+        monkeypatch.setenv("STORAGE_CLOUDFRONT_KEY_PAIR_ID", "APKAEXAMPLEKEYPAIR")
+        monkeypatch.setenv(
+            "STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH", _write_cloudfront_private_key(tmp_path)
+        )
 
         uid = db.ensure_user("s3-dl@test.local")
         vid = _seed_project(uid)
@@ -102,11 +133,13 @@ def test_download_video_redirects_to_signed_url_via_s3_storage(
         db.set_mp4(vid, key)
 
         resp = client.get(f"/projects/{vid}/video", follow_redirects=False)
-        assert resp.status_code == 307
+        assert resp.status_code == 302
         location = resp.headers["location"]
-        assert location.startswith("https://")
-        assert bucket in location
+        assert location.startswith("https://d123abc.cloudfront.net/")
+        assert bucket not in location  # bucket stays private, never exposed in the URL
         assert "render.mp4" in location
+        assert "Key-Pair-Id=APKAEXAMPLEKEYPAIR" in location
+        assert "Signature=" in location
 
 
 def test_download_video_404_when_key_recorded_but_missing_from_storage(

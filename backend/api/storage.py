@@ -8,10 +8,16 @@ filesystem directly for these — `LocalStorage` (dev, under `out/storage/`) and
 
 Keys are POSIX-style relative paths (e.g. "projects/<pid>/render.mp4") — backends
 map them to their own addressing (a local file path, an S3 object key).
+
+`S3Storage.signed_url()` serves through **CloudFront**, not an S3 presigned URL
+(issue #14 / architecture §12): the bucket stays private behind the distribution
+(OAC/OAI), so a presigned S3 URL would still expose the bucket's own endpoint. See
+`STORAGE_CLOUDFRONT_*` env vars below.
 """
 
 import os
 from abc import ABC, abstractmethod
+from datetime import UTC, datetime, timedelta
 from functools import cache
 
 # backend/api/storage.py -> backend/
@@ -144,7 +150,8 @@ class LocalStorage(Storage):
 
 
 class S3Storage(Storage):
-    """Prod backend: binaries live in a private S3 bucket via boto3.
+    """Prod backend: binaries live in a private S3 bucket via boto3, served to
+    clients through a CloudFront distribution in front of it (issue #14).
 
     boto3 is an optional dependency (`uv sync --extra s3`) so local dev/CI never needs
     it installed unless `STORAGE_BACKEND=s3` is actually selected — the import happens
@@ -157,6 +164,9 @@ class S3Storage(Storage):
         *,
         region_name: str | None = None,
         endpoint_url: str | None = None,
+        cloudfront_domain: str | None = None,
+        cloudfront_key_pair_id: str | None = None,
+        cloudfront_private_key_path: str | None = None,
     ) -> None:
         try:
             import boto3
@@ -170,6 +180,13 @@ class S3Storage(Storage):
         # pyproject.toml) — `ignore_missing_imports` makes this whole client `Any`
         # under mypy, same tolerance the project already applies to psycopg/urllib.
         self._client = boto3.client("s3", region_name=region_name, endpoint_url=endpoint_url)
+        # CloudFront config is only required by signed_url() (put/get/exists never
+        # need it) — kept optional here so a caller that only writes/reads objects
+        # (e.g. the render worker, issue #13) doesn't need CloudFront credentials
+        # configured at all; signed_url() below fails loudly if it's missing.
+        self._cloudfront_domain = cloudfront_domain
+        self._cloudfront_key_pair_id = cloudfront_key_pair_id
+        self._cloudfront_private_key_path = cloudfront_private_key_path
 
     def put(self, key: str, data: bytes) -> None:
         self._client.put_object(Bucket=self._bucket, Key=key, Body=data)
@@ -196,11 +213,64 @@ class S3Storage(Storage):
         return f"s3://{self._bucket}/{key}"
 
     def signed_url(self, key: str, ttl_seconds: int) -> str:
-        signed: str = self._client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": self._bucket, "Key": key},
-            ExpiresIn=ttl_seconds,
-        )
+        """A CloudFront signed URL for `key` (issue #14): the bucket stays private,
+        the distribution is the only thing allowed to read it (OAC/OAI) — a plain
+        S3 presigned URL would defeat that by pointing straight at the bucket.
+
+        Requires `cloudfront_domain`/`cloudfront_key_pair_id`/`cloudfront_private_key_path`
+        (see `STORAGE_CLOUDFRONT_*` env vars in `get_storage()`) — raises
+        `StorageConfigError` naming whichever is missing rather than silently
+        falling back to an S3 presigned URL.
+        """
+        missing = [
+            env_name
+            for env_name, value in (
+                ("STORAGE_CLOUDFRONT_DOMAIN", self._cloudfront_domain),
+                ("STORAGE_CLOUDFRONT_KEY_PAIR_ID", self._cloudfront_key_pair_id),
+                ("STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH", self._cloudfront_private_key_path),
+            )
+            if not value
+        ]
+        if missing:
+            raise StorageConfigError(
+                "STORAGE_BACKEND=s3 requires CloudFront signed-URL config; missing: "
+                + ", ".join(missing)
+            )
+        # cryptography is declared under the `s3` extra alongside boto3 (pyproject.toml)
+        # — imported lazily, at call time, for the same reason boto3 is imported lazily
+        # in __init__: callers that only put()/get()/exists() (e.g. the render worker)
+        # never need it.
+        try:
+            from botocore.signers import CloudFrontSigner
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.asymmetric import padding
+            from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
+            from cryptography.hazmat.primitives.serialization import load_pem_private_key
+        except ImportError as exc:
+            raise StorageBackendUnavailableError(
+                "CloudFront signed URLs require 'cryptography' — install it with "
+                "`uv sync --extra s3`."
+            ) from exc
+
+        assert self._cloudfront_private_key_path is not None  # narrowed by the check above
+        with open(self._cloudfront_private_key_path, "rb") as f:
+            private_key = load_pem_private_key(f.read(), password=None)
+        if not isinstance(private_key, RSAPrivateKey):
+            raise StorageConfigError(
+                f"STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH ({self._cloudfront_private_key_path!r}) "
+                "must hold an RSA private key — CloudFront canned-policy signing requires it."
+            )
+
+        def rsa_signer(message: bytes) -> bytes:
+            # CloudFront's signing protocol mandates SHA1 with PKCS1v15 — not a choice
+            # made here, it's the only scheme CloudFront's viewer-request verification
+            # accepts for signed URLs/cookies.
+            return private_key.sign(message, padding.PKCS1v15(), hashes.SHA1())
+
+        signer = CloudFrontSigner(self._cloudfront_key_pair_id, rsa_signer)
+        resource_url = f"https://{self._cloudfront_domain}/{key}"
+        expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+        signed: str = signer.generate_presigned_url(resource_url, date_less_than=expires_at)
         return signed
 
     def local_path(self, key: str) -> str | None:
@@ -216,8 +286,22 @@ def _cached_local_storage(root: str) -> LocalStorage:
 
 
 @cache
-def _cached_s3_storage(bucket: str, region_name: str | None, endpoint_url: str | None) -> S3Storage:
-    return S3Storage(bucket, region_name=region_name, endpoint_url=endpoint_url)
+def _cached_s3_storage(
+    bucket: str,
+    region_name: str | None,
+    endpoint_url: str | None,
+    cloudfront_domain: str | None,
+    cloudfront_key_pair_id: str | None,
+    cloudfront_private_key_path: str | None,
+) -> S3Storage:
+    return S3Storage(
+        bucket,
+        region_name=region_name,
+        endpoint_url=endpoint_url,
+        cloudfront_domain=cloudfront_domain,
+        cloudfront_key_pair_id=cloudfront_key_pair_id,
+        cloudfront_private_key_path=cloudfront_private_key_path,
+    )
 
 
 def get_storage() -> Storage:
@@ -230,6 +314,11 @@ def get_storage() -> Storage:
     every time. A different config (e.g. a test's own `STORAGE_LOCAL_ROOT` under
     `tmp_path`) is simply a different cache key — no process-wide state to reset
     between tests.
+
+    CloudFront config (`STORAGE_CLOUDFRONT_DOMAIN`/`_KEY_PAIR_ID`/`_PRIVATE_KEY_PATH`,
+    issue #14) is read here too but left optional: only `S3Storage.signed_url()`
+    needs it, so a process that only `put()`s/`get()`s objects (e.g. the render
+    worker) can run against `STORAGE_BACKEND=s3` without it configured at all.
     """
     backend = os.environ.get("STORAGE_BACKEND", "local")
     if backend == "local":
@@ -246,5 +335,8 @@ def get_storage() -> Storage:
             bucket,
             os.environ.get("STORAGE_S3_REGION"),
             os.environ.get("STORAGE_S3_ENDPOINT_URL"),  # e.g. moto/LocalStack in tests
+            os.environ.get("STORAGE_CLOUDFRONT_DOMAIN"),
+            os.environ.get("STORAGE_CLOUDFRONT_KEY_PAIR_ID"),
+            os.environ.get("STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH"),
         )
     raise StorageConfigError(f"unknown STORAGE_BACKEND={backend!r}; expected 'local' or 's3'")

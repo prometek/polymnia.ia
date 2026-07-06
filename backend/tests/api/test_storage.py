@@ -167,6 +167,31 @@ def s3_bucket() -> object:
         yield "polymnia-test-bucket"
 
 
+cryptography = pytest.importorskip(
+    "cryptography",
+    reason="cryptography is bundled with the s3 extra (CloudFront signing, issue #14)",
+)
+
+
+@pytest.fixture
+def cloudfront_private_key_path(tmp_path: Path) -> str:
+    """An ephemeral RSA key pair, PEM-encoded to a file — `signed_url()` reads the
+    CloudFront private key from a path (`STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH`), never
+    from an inline env var value, so tests need a real file on disk."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    path = tmp_path / "cloudfront_private_key.pem"
+    path.write_bytes(pem)
+    return str(path)
+
+
 def test_s3_storage_put_get_round_trip(s3_bucket: str) -> None:
     """Same calling code as LocalStorage (acceptance criterion 2): put() then get()
     returns the exact bytes, against a real (mocked) S3 API."""
@@ -203,14 +228,33 @@ def test_s3_storage_url_is_an_s3_uri(s3_bucket: str) -> None:
     assert storage.url("k") == f"s3://{s3_bucket}/k"
 
 
-def test_s3_storage_signed_url_is_a_fetchable_https_url_with_ttl(s3_bucket: str) -> None:
-    storage = S3Storage(s3_bucket)
+def test_s3_storage_signed_url_without_cloudfront_config_raises_config_error(
+    s3_bucket: str,
+) -> None:
+    """No silent fallback to an S3 presigned URL (issue #14 — the bucket must stay
+    private, only reachable via CloudFront): missing CloudFront config is a clear,
+    actionable error instead."""
+    storage = S3Storage(s3_bucket)  # no cloudfront_* kwargs
     storage.put("k", b"data")
-    signed = storage.signed_url("k", ttl_seconds=120)
-    assert signed.startswith("https://")
-    assert "k" in signed
-    # A presigned GET carries its expiry in the query string (SigV4).
-    assert "Expires" in signed or "X-Amz-Expires" in signed
+    with pytest.raises(StorageConfigError, match="CloudFront"):
+        storage.signed_url("k", ttl_seconds=120)
+
+
+def test_s3_storage_signed_url_is_a_cloudfront_url_with_ttl_and_key_pair(
+    s3_bucket: str, cloudfront_private_key_path: str
+) -> None:
+    storage = S3Storage(
+        s3_bucket,
+        cloudfront_domain="d123abc.cloudfront.net",
+        cloudfront_key_pair_id="APKAEXAMPLEKEYPAIR",
+        cloudfront_private_key_path=cloudfront_private_key_path,
+    )
+    storage.put("projects/p1/render.mp4", b"data")
+    signed = storage.signed_url("projects/p1/render.mp4", ttl_seconds=120)
+    assert signed.startswith("https://d123abc.cloudfront.net/projects/p1/render.mp4?")
+    assert "Key-Pair-Id=APKAEXAMPLEKEYPAIR" in signed
+    assert "Signature=" in signed
+    assert "Expires=" in signed  # canned-policy expiry, derived from ttl_seconds
 
 
 def test_get_storage_selects_s3_backend_via_env(
