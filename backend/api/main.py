@@ -24,13 +24,14 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from tasks import generation
 from tasks import render as render_jobs
 
 from . import db, job_events, queue_metrics, service
+from .storage import get_storage
 
 DEV_EMAIL = "dev@polymnia.local"
 
@@ -227,10 +228,20 @@ def render(pid: str, video: Video, kit: Kit) -> JobStarted:
 
 
 @app.get("/projects/{pid}/video")
-def download_video(video: Video) -> FileResponse:
-    if not video["mp4_path"] or not os.path.exists(video["mp4_path"]):
+def download_video(video: Video) -> Response:
+    """Serve the rendered MP4 via Storage (issue #12), not a raw filesystem path —
+    `mp4_path` is a storage key, resolved by whichever backend `STORAGE_BACKEND`
+    selects (local disk in dev, S3 in prod), so this call-site is unchanged either way.
+    """
+    key = video["mp4_path"]
+    storage = get_storage()
+    if not key or not storage.exists(key):
         raise HTTPException(404, "no rendered video yet")
-    return FileResponse(video["mp4_path"], media_type="video/mp4", filename=f"{video['id']}.mp4")
+    return Response(
+        content=storage.get(key),
+        media_type="video/mp4",
+        headers={"Content-Disposition": f'attachment; filename="{video["id"]}.mp4"'},
+    )
 
 
 # --- Metrics -----------------------------------------------------------------
