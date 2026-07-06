@@ -13,6 +13,7 @@ once per session and every table is truncated between tests for determinism.
 
 import os
 from collections.abc import Iterator
+from pathlib import Path
 
 import psycopg
 from dotenv import load_dotenv
@@ -67,6 +68,18 @@ def _clean_db() -> Iterator[None]:
     with engine.begin() as conn:
         conn.execute(text(f"TRUNCATE {', '.join(_TABLES)} RESTART IDENTITY CASCADE"))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolated_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Storage abstraction (issue #12): every test gets its own LocalStorage root
+    under pytest's `tmp_path`, never the real dev `backend/out/storage` tree — keeps
+    tests deterministic (no cross-test leakage) and out of the gitignored dev tree.
+    `STORAGE_BACKEND` defaults to `local` already; pinned explicitly so a leaked
+    `STORAGE_BACKEND=s3` from the environment can never silently redirect a test.
+    """
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("STORAGE_LOCAL_ROOT", str(tmp_path / "storage"))
 
 
 @pytest.fixture
