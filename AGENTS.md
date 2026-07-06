@@ -16,7 +16,7 @@
 - Framework(s): FastAPI (API) · Remotion 4 + React 19 (headless render worker)
 - Database: PostgreSQL via SQLModel (SQLAlchemy + psycopg 3 driver)
 - Package manager: `uv` (backend) · `npm` (render-motor)
-- Key external services: Mistral LLM (`mistral-medium-latest`) · Mistral Voxtral TTS · Object Storage/CDN (`Storage` abstraction implemented, issue #12 — local dev / S3 prod; CDN + data migration still pending)
+- Key external services: Mistral LLM (`mistral-medium-latest`) · Mistral Voxtral TTS · Object Storage/CDN (`Storage` abstraction implemented, issue #12 — local dev / S3 prod; render worker's MP4 + audio output fully routed through it, no local blob left behind, issue #13; CDN + data migration still pending)
 
 ## Environment & commands
 
@@ -62,12 +62,18 @@ Two subprojects with separate toolchains under a single git repo at the root.
 - Worker logs:          `docker compose logs -f render-worker` → look for
   `celery@... ready.` and `[queues] .> render`
 - Known limitation: `render_project()` still writes the rendered MP4 to a
-  container-local path (`/app/render-motor/out/...`) before promoting it into
-  Storage (`storage.put`, issue #12) — the compose `render-out` named volume
-  remains a POC bridge for that intermediate local write, not the delivery
-  path. Cross-service delivery now goes through the `Storage` abstraction
-  (`STORAGE_BACKEND=local|s3`, see above); actual data migration to S3 and a
-  CDN in front of it are still pending (PRO-12/14, Étape 2).
+  container-local path (`/app/render-motor/out/...`) first — `npx remotion
+  render` is a subprocess, it can't target S3 directly — before promoting it
+  into Storage (`storage.put`, issue #12). Since issue #13, that intermediate
+  write (plus the packed `render-input-{pid}.json` and the audio
+  materialized under `public/proj-{pid}/`) is deleted in a `finally` right
+  after promotion is attempted, on both success and failure — so the compose
+  `render-out` named volume no longer accumulates rendered MP4s across
+  renders; it's transient scratch for the few seconds a render is in flight,
+  not a place to inspect past output. Cross-service delivery goes entirely
+  through the `Storage` abstraction (`STORAGE_BACKEND=local|s3`, see above) —
+  the key persisted as `videos.mp4_path` is what other containers/hosts
+  resolve. CDN in front of Object Storage is still pending (PRO-14, Étape 2).
 
 > CI is live: `.github/workflows/ci.yml` runs on PRs + `main` — backend Python
 > (`ruff check` + `ruff format --check`, `mypy` strict, `alembic upgrade` +
