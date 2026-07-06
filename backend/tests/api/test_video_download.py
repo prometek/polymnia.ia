@@ -270,6 +270,49 @@ def test_download_video_with_incomplete_cloudfront_config_fails_loud_not_silentl
             client.get(f"/projects/{vid}/video", follow_redirects=False)
 
 
+def test_download_video_with_corrupt_cloudfront_private_key_fails_loud_through_the_route(
+    client: TestClient,
+    as_user: Callable[[str], None],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Issue #14 fix round: a `STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH` that points at a
+    file that isn't a valid PEM private key (corrupt/truncated/wrong format) must
+    raise the typed `StorageConfigError` out of the real HTTP route — not a raw
+    `ValueError`/`OSError` from `cryptography`'s own PEM parser surfacing as an
+    unhandled 500 with no actionable message."""
+    boto3 = pytest.importorskip(
+        "boto3", reason="boto3 is an optional dependency (`uv sync --extra s3`)"
+    )
+    moto = pytest.importorskip("moto", reason="moto (dev dependency) mocks S3")
+    pytest.importorskip(
+        "cryptography", reason="cryptography is bundled with the s3 extra (issue #14)"
+    )
+
+    with moto.mock_aws():
+        bucket = "polymnia-video-bad-pem-test"
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket)
+        monkeypatch.setenv("STORAGE_BACKEND", "s3")
+        monkeypatch.setenv("STORAGE_S3_BUCKET", bucket)
+        monkeypatch.setenv("STORAGE_S3_REGION", "us-east-1")
+        monkeypatch.setenv("STORAGE_CLOUDFRONT_DOMAIN", "d123abc.cloudfront.net")
+        monkeypatch.setenv("STORAGE_CLOUDFRONT_KEY_PAIR_ID", "APKAEXAMPLEKEYPAIR")
+        bad_key_path = tmp_path / "not_a_key.pem"
+        bad_key_path.write_bytes(b"this is not a PEM private key")
+        monkeypatch.setenv("STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH", str(bad_key_path))
+
+        uid = db.ensure_user("s3-bad-pem@test.local")
+        vid = _seed_project(uid)
+        as_user(uid)
+
+        key = f"projects/{vid}/render.mp4"
+        get_storage().put(key, b"mp4-bytes")
+        db.set_mp4(vid, key)
+
+        with pytest.raises(StorageConfigError, match="PEM"):
+            client.get(f"/projects/{vid}/video", follow_redirects=False)
+
+
 def test_download_video_404_when_key_recorded_but_missing_from_storage(
     client: TestClient, as_user: Callable[[str], None]
 ) -> None:

@@ -262,6 +262,34 @@ def test_s3_storage_signed_url_with_invalid_pem_raises_config_error_not_a_traceb
         storage.signed_url("k", ttl_seconds=120)
 
 
+def test_s3_storage_signed_url_with_invalid_pem_fails_loud_on_every_call_not_just_the_first(
+    s3_bucket: str, tmp_path: Path
+) -> None:
+    """`_cloudfront_signer` is a `cached_property` (issue #14 fix round): it must
+    only ever cache a *successful* parse, never a raised exception. Guard against a
+    regression where the property silently swallows the error on the first call and
+    then returns `None`/a half-built signer on the second — a bad PEM must keep
+    failing loud on every subsequent `signed_url()` call against the same instance,
+    not just the first."""
+    bad_key_path = tmp_path / "not_a_key.pem"
+    bad_key_path.write_bytes(b"this is not a PEM private key")
+    storage = S3Storage(
+        s3_bucket,
+        cloudfront_domain="d123abc.cloudfront.net",
+        cloudfront_key_pair_id="APKAEXAMPLEKEYPAIR",
+        cloudfront_private_key_path=str(bad_key_path),
+    )
+    storage.put("k", b"data")
+
+    with pytest.raises(StorageConfigError, match="PEM"):
+        storage.signed_url("k", ttl_seconds=120)
+    # Second call, same instance: must raise again, not return a stale/garbage URL.
+    with pytest.raises(StorageConfigError, match="PEM"):
+        storage.signed_url("k", ttl_seconds=120)
+    # And the cached_property must never have stored anything on failure.
+    assert "_cloudfront_signer" not in storage.__dict__
+
+
 @pytest.mark.parametrize(
     ("missing_kwarg", "expected_env_name"),
     [
