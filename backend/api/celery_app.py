@@ -25,11 +25,12 @@ render until PRO-07 splits it out. In dev, one worker can drain both:
 import os
 
 from celery import Celery
-from dotenv import load_dotenv
 
-load_dotenv()
+from .redis_config import REDIS_URL
 
-BROKER_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+# Centralized in redis_config.py (issue #10) so the Celery broker and the
+# job-events pub/sub relay (api/job_events.py) can't drift out of sync.
+BROKER_URL = REDIS_URL
 RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND") or None
 
 celery_app = Celery(
