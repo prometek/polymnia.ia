@@ -1,17 +1,20 @@
-"""MP4 download via Storage (issue #12).
+"""MP4 download via Storage (issue #12/#14).
 
 `GET /projects/{pid}/video` resolves `mp4_path` (a Storage key) through the
 `Storage` abstraction: LocalStorage (dev) streams the file straight off disk via
 `FileResponse` (Range support, no full-file memory load); S3Storage (prod,
-PRO-12/14) has no local filesystem representation, so the route redirects (307)
-to a signed URL instead of proxying bytes (architecture §12).
+PRO-12/14) has no local filesystem representation, so the route redirects (302)
+to a CloudFront signed URL instead of proxying bytes (architecture §12).
 """
 
+import time
 from collections.abc import Callable
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from api import db
-from api.storage import get_storage
+from api.storage import StorageConfigError, get_storage
 from starlette.testclient import TestClient
 
 
@@ -20,6 +23,26 @@ def _seed_project(user_id: str) -> str:
     vid = db.uuid.uuid4().hex[:12]
     db.create_video(vid, user_id, version_id, "v")
     return vid
+
+
+def _write_cloudfront_private_key(tmp_path: Path) -> str:
+    """An ephemeral RSA key pair PEM-encoded to a file — `signed_url()` reads the
+    CloudFront private key from a path (`STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH`)."""
+    pytest.importorskip(
+        "cryptography", reason="cryptography is bundled with the s3 extra (issue #14)"
+    )
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    path = tmp_path / "cloudfront_private_key.pem"
+    path.write_bytes(pem)
+    return str(path)
 
 
 def test_download_video_404_before_any_render(
@@ -76,11 +99,16 @@ def test_download_video_supports_range_requests_via_local_storage(
     assert resp.headers["content-range"] == f"bytes 10-19/{len(mp4_bytes)}"
 
 
-def test_download_video_redirects_to_signed_url_via_s3_storage(
-    client: TestClient, as_user: Callable[[str], None], monkeypatch: pytest.MonkeyPatch
+def test_download_video_redirects_to_signed_cloudfront_url_via_s3_storage(
+    client: TestClient,
+    as_user: Callable[[str], None],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    """S3-backed video: the API never proxies bytes for this backend — it redirects
-    (307) to a short-lived signed URL for the same key (architecture §12)."""
+    """S3-backed video: the API never proxies bytes for this backend — it 302s to a
+    short-lived CloudFront signed URL for the same key (issue #14 / architecture §12).
+    The bucket itself never appears in the redirect: only the CDN in front of it does.
+    """
     boto3 = pytest.importorskip(
         "boto3", reason="boto3 is an optional dependency (`uv sync --extra s3`)"
     )
@@ -92,6 +120,11 @@ def test_download_video_redirects_to_signed_url_via_s3_storage(
         monkeypatch.setenv("STORAGE_BACKEND", "s3")
         monkeypatch.setenv("STORAGE_S3_BUCKET", bucket)
         monkeypatch.setenv("STORAGE_S3_REGION", "us-east-1")
+        monkeypatch.setenv("STORAGE_CLOUDFRONT_DOMAIN", "d123abc.cloudfront.net")
+        monkeypatch.setenv("STORAGE_CLOUDFRONT_KEY_PAIR_ID", "APKAEXAMPLEKEYPAIR")
+        monkeypatch.setenv(
+            "STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH", _write_cloudfront_private_key(tmp_path)
+        )
 
         uid = db.ensure_user("s3-dl@test.local")
         vid = _seed_project(uid)
@@ -102,11 +135,182 @@ def test_download_video_redirects_to_signed_url_via_s3_storage(
         db.set_mp4(vid, key)
 
         resp = client.get(f"/projects/{vid}/video", follow_redirects=False)
-        assert resp.status_code == 307
+        assert resp.status_code == 302
         location = resp.headers["location"]
-        assert location.startswith("https://")
-        assert bucket in location
+        assert location.startswith("https://d123abc.cloudfront.net/")
+        assert bucket not in location  # bucket stays private, never exposed in the URL
         assert "render.mp4" in location
+        assert "Key-Pair-Id=APKAEXAMPLEKEYPAIR" in location
+        assert "Signature=" in location
+
+
+def test_download_video_redirect_body_never_carries_the_mp4_bytes(
+    client: TestClient,
+    as_user: Callable[[str], None],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Acceptance criterion 4: the API must never stream the file itself for the S3
+    backend — the 302 response body (unlike the LocalStorage/FileResponse case) must
+    be small and must not contain the video payload; the client fetches the bytes
+    from CloudFront, not from this process."""
+    boto3 = pytest.importorskip(
+        "boto3", reason="boto3 is an optional dependency (`uv sync --extra s3`)"
+    )
+    moto = pytest.importorskip("moto", reason="moto (dev dependency) mocks S3")
+
+    with moto.mock_aws():
+        bucket = "polymnia-video-no-stream-test"
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket)
+        monkeypatch.setenv("STORAGE_BACKEND", "s3")
+        monkeypatch.setenv("STORAGE_S3_BUCKET", bucket)
+        monkeypatch.setenv("STORAGE_S3_REGION", "us-east-1")
+        monkeypatch.setenv("STORAGE_CLOUDFRONT_DOMAIN", "d123abc.cloudfront.net")
+        monkeypatch.setenv("STORAGE_CLOUDFRONT_KEY_PAIR_ID", "APKAEXAMPLEKEYPAIR")
+        monkeypatch.setenv(
+            "STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH", _write_cloudfront_private_key(tmp_path)
+        )
+
+        uid = db.ensure_user("s3-no-stream@test.local")
+        vid = _seed_project(uid)
+        as_user(uid)
+
+        mp4_bytes = b"\x00\x00\x00\x18ftypmp42" + bytes(range(256)) * 1000  # sizeable payload
+        key = f"projects/{vid}/render.mp4"
+        get_storage().put(key, mp4_bytes)
+        db.set_mp4(vid, key)
+
+        resp = client.get(f"/projects/{vid}/video", follow_redirects=False)
+        assert resp.status_code == 302
+        assert mp4_bytes not in resp.content
+        # A redirect body is tiny (empty or a short HTML stub) — nowhere near the
+        # size of the video it points at.
+        assert len(resp.content) < 1024
+        assert resp.headers.get("content-type") != "video/mp4"
+
+
+def test_download_video_signed_url_expiry_reflects_the_configured_ttl(
+    client: TestClient,
+    as_user: Callable[[str], None],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Acceptance criterion 2, exercised through the real HTTP route rather than the
+    Storage unit directly: the redirect's `Expires` must be close to "now + the
+    route's configured TTL" (`STORAGE_CLOUDFRONT_SIGNED_URL_TTL_S`, default 300s,
+    read once at import time by `api.main`), not an arbitrary/huge value."""
+    boto3 = pytest.importorskip(
+        "boto3", reason="boto3 is an optional dependency (`uv sync --extra s3`)"
+    )
+    moto = pytest.importorskip("moto", reason="moto (dev dependency) mocks S3")
+    from api.main import VIDEO_SIGNED_URL_TTL_S
+
+    with moto.mock_aws():
+        bucket = "polymnia-video-ttl-test"
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket)
+        monkeypatch.setenv("STORAGE_BACKEND", "s3")
+        monkeypatch.setenv("STORAGE_S3_BUCKET", bucket)
+        monkeypatch.setenv("STORAGE_S3_REGION", "us-east-1")
+        monkeypatch.setenv("STORAGE_CLOUDFRONT_DOMAIN", "d123abc.cloudfront.net")
+        monkeypatch.setenv("STORAGE_CLOUDFRONT_KEY_PAIR_ID", "APKAEXAMPLEKEYPAIR")
+        monkeypatch.setenv(
+            "STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH", _write_cloudfront_private_key(tmp_path)
+        )
+
+        uid = db.ensure_user("s3-ttl@test.local")
+        vid = _seed_project(uid)
+        as_user(uid)
+
+        key = f"projects/{vid}/render.mp4"
+        get_storage().put(key, b"mp4-bytes")
+        db.set_mp4(vid, key)
+
+        before = int(time.time())
+        resp = client.get(f"/projects/{vid}/video", follow_redirects=False)
+        after = int(time.time())
+        assert resp.status_code == 302
+
+        location = resp.headers["location"]
+        expires = int(parse_qs(urlparse(location).query)["Expires"][0])
+        assert before + VIDEO_SIGNED_URL_TTL_S <= expires <= after + VIDEO_SIGNED_URL_TTL_S + 2
+
+
+def test_download_video_with_incomplete_cloudfront_config_fails_loud_not_silently(
+    client: TestClient, as_user: Callable[[str], None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Acceptance criterion 5, through the real HTTP route: an S3-backed project
+    with CloudFront config missing (or incomplete) must not silently fall back to
+    streaming bytes or an unsigned/S3-presigned URL — it must raise the typed
+    `StorageConfigError` out of the route rather than return 200/302 with a broken
+    security posture."""
+    boto3 = pytest.importorskip(
+        "boto3", reason="boto3 is an optional dependency (`uv sync --extra s3`)"
+    )
+    moto = pytest.importorskip("moto", reason="moto (dev dependency) mocks S3")
+
+    with moto.mock_aws():
+        bucket = "polymnia-video-no-cf-config-test"
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket)
+        monkeypatch.setenv("STORAGE_BACKEND", "s3")
+        monkeypatch.setenv("STORAGE_S3_BUCKET", bucket)
+        monkeypatch.setenv("STORAGE_S3_REGION", "us-east-1")
+        monkeypatch.delenv("STORAGE_CLOUDFRONT_DOMAIN", raising=False)
+        monkeypatch.delenv("STORAGE_CLOUDFRONT_KEY_PAIR_ID", raising=False)
+        monkeypatch.delenv("STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH", raising=False)
+
+        uid = db.ensure_user("s3-no-cf@test.local")
+        vid = _seed_project(uid)
+        as_user(uid)
+
+        key = f"projects/{vid}/render.mp4"
+        get_storage().put(key, b"mp4-bytes")
+        db.set_mp4(vid, key)
+
+        with pytest.raises(StorageConfigError, match="CloudFront"):
+            client.get(f"/projects/{vid}/video", follow_redirects=False)
+
+
+def test_download_video_with_corrupt_cloudfront_private_key_fails_loud_through_the_route(
+    client: TestClient,
+    as_user: Callable[[str], None],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Issue #14 fix round: a `STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH` that points at a
+    file that isn't a valid PEM private key (corrupt/truncated/wrong format) must
+    raise the typed `StorageConfigError` out of the real HTTP route — not a raw
+    `ValueError`/`OSError` from `cryptography`'s own PEM parser surfacing as an
+    unhandled 500 with no actionable message."""
+    boto3 = pytest.importorskip(
+        "boto3", reason="boto3 is an optional dependency (`uv sync --extra s3`)"
+    )
+    moto = pytest.importorskip("moto", reason="moto (dev dependency) mocks S3")
+    pytest.importorskip(
+        "cryptography", reason="cryptography is bundled with the s3 extra (issue #14)"
+    )
+
+    with moto.mock_aws():
+        bucket = "polymnia-video-bad-pem-test"
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket)
+        monkeypatch.setenv("STORAGE_BACKEND", "s3")
+        monkeypatch.setenv("STORAGE_S3_BUCKET", bucket)
+        monkeypatch.setenv("STORAGE_S3_REGION", "us-east-1")
+        monkeypatch.setenv("STORAGE_CLOUDFRONT_DOMAIN", "d123abc.cloudfront.net")
+        monkeypatch.setenv("STORAGE_CLOUDFRONT_KEY_PAIR_ID", "APKAEXAMPLEKEYPAIR")
+        bad_key_path = tmp_path / "not_a_key.pem"
+        bad_key_path.write_bytes(b"this is not a PEM private key")
+        monkeypatch.setenv("STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH", str(bad_key_path))
+
+        uid = db.ensure_user("s3-bad-pem@test.local")
+        vid = _seed_project(uid)
+        as_user(uid)
+
+        key = f"projects/{vid}/render.mp4"
+        get_storage().put(key, b"mp4-bytes")
+        db.set_mp4(vid, key)
+
+        with pytest.raises(StorageConfigError, match="PEM"):
+            client.get(f"/projects/{vid}/video", follow_redirects=False)
 
 
 def test_download_video_404_when_key_recorded_but_missing_from_storage(

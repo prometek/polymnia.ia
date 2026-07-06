@@ -35,10 +35,11 @@ from .storage import StorageKeyNotFoundError, get_storage
 
 DEV_EMAIL = "dev@polymnia.local"
 
-# How long a redirect to an S3 signed URL stays valid (issue #12) — long enough for a
-# client to start streaming the video, short enough that a leaked link doesn't grant
-# durable access to a private bucket object.
-VIDEO_SIGNED_URL_TTL_S = 300
+# How long a redirect to a CloudFront signed URL stays valid (issue #12/#14) — long
+# enough for a client to start streaming the video, short enough that a leaked link
+# doesn't grant durable access to a private bucket object. Configurable per
+# environment (e.g. a slower prod network needs more headroom than dev).
+VIDEO_SIGNED_URL_TTL_S = int(os.environ.get("STORAGE_CLOUDFRONT_SIGNED_URL_TTL_S", "300"))
 
 
 @asynccontextmanager
@@ -241,9 +242,10 @@ def download_video(video: Video) -> Response:
     The two backends are served differently on purpose (Storage.local_path is the
     seam): local dev streams the file straight off disk via `FileResponse`, which
     gives HTTP Range support (in-browser seeking) for free and never loads the whole
-    MP4 into process memory; S3 has no local filesystem representation, so we redirect
-    to a short-lived signed URL instead of proxying bytes through this process
-    (architecture §12 — private bucket, CDN/signed-URL delivery).
+    MP4 into process memory; S3 has no local filesystem representation, so we
+    `302`-redirect to a short-lived CloudFront signed URL instead of proxying bytes
+    through this process (issue #14 / architecture §12 — private bucket, CDN + signed
+    URL delivery; the bucket itself is never reachable directly).
     """
     key = video["mp4_path"]
     if not key:
@@ -266,7 +268,12 @@ def download_video(video: Video) -> Response:
         raise HTTPException(404, "no rendered video yet") from exc
     if path is not None:
         return FileResponse(path, media_type="video/mp4", filename=filename)
-    return RedirectResponse(storage.signed_url(key, VIDEO_SIGNED_URL_TTL_S), status_code=307)
+    # 302, not 307: this is a delivery redirect to a fresh short-lived URL every time,
+    # never a semantic "resource permanently lives elsewhere" — 307 would additionally
+    # imply clients should replay the exact method/body, which doesn't matter for a
+    # GET but isn't the contract we want callers to rely on (issue #14 acceptance
+    # criteria are explicit about 302).
+    return RedirectResponse(storage.signed_url(key, VIDEO_SIGNED_URL_TTL_S), status_code=302)
 
 
 # --- Metrics -----------------------------------------------------------------

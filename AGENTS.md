@@ -16,7 +16,7 @@
 - Framework(s): FastAPI (API) · Remotion 4 + React 19 (headless render worker)
 - Database: PostgreSQL via SQLModel (SQLAlchemy + psycopg 3 driver)
 - Package manager: `uv` (backend) · `npm` (render-motor)
-- Key external services: Mistral LLM (`mistral-medium-latest`) · Mistral Voxtral TTS · Object Storage/CDN (`Storage` abstraction implemented, issue #12 — local dev / S3 prod; render worker's MP4 + audio output fully routed through it, no local blob left behind, issue #13; CDN + data migration still pending)
+- Key external services: Mistral LLM (`mistral-medium-latest`) · Mistral Voxtral TTS · Object Storage/CDN (`Storage` abstraction implemented, issue #12 — local dev / S3 prod; render worker's MP4 + audio output fully routed through it, no local blob left behind, issue #13; `GET /projects/{id}/video` now 302-redirects to a CloudFront signed URL when `STORAGE_BACKEND=s3`, issue #14; CloudFront distribution/OAC provisioning + data migration still pending)
 
 ## Environment & commands
 
@@ -36,7 +36,8 @@ Two subprojects with separate toolchains under a single git repo at the root.
 - Pre-commit:          `uv run pre-commit install --install-hooks --hook-type commit-msg`
 - Install S3 storage extra: `uv sync --extra s3`   # only needed for `STORAGE_BACKEND=s3` (pulls in `boto3`); local dev/CI don't need it
 - Storage backend (issue #12): `STORAGE_BACKEND=local|s3` (default `local`, under `backend/out/storage/` or `STORAGE_LOCAL_ROOT`).
-  For `s3`: `STORAGE_S3_BUCKET` (required), `STORAGE_S3_REGION`, `STORAGE_S3_ENDPOINT_URL` (e.g. moto/LocalStack for tests). See `backend/api/storage.py`.
+  For `s3`: `STORAGE_S3_BUCKET` (required), `STORAGE_S3_REGION`, `STORAGE_S3_ENDPOINT_URL` (e.g. moto/LocalStack for tests).
+  Video downloads (`GET /projects/{id}/video`) are 302-redirected to a CloudFront signed URL on `s3` (issue #14) — requires `STORAGE_CLOUDFRONT_DOMAIN`, `STORAGE_CLOUDFRONT_KEY_PAIR_ID`, `STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH` (RSA private key, PEM); optional `STORAGE_CLOUDFRONT_SIGNED_URL_TTL_S` (default 300). Missing/invalid config raises `StorageConfigError`. See `backend/api/storage.py`.
 
 **Render-motor (`render-motor/`)**
 - Install deps:        `npm install`
@@ -73,7 +74,9 @@ Two subprojects with separate toolchains under a single git repo at the root.
   not a place to inspect past output. Cross-service delivery goes entirely
   through the `Storage` abstraction (`STORAGE_BACKEND=local|s3`, see above) —
   the key persisted as `videos.mp4_path` is what other containers/hosts
-  resolve. CDN in front of Object Storage is still pending (PRO-14, Étape 2).
+  resolve. Client-facing delivery on `s3` now goes through a CloudFront
+  signed URL (issue #14, `S3Storage.signed_url()`); the actual CloudFront
+  distribution + OAC/OAI provisioning is still pending infra work (Étape 2).
 
 > CI is live: `.github/workflows/ci.yml` runs on PRs + `main` — backend Python
 > (`ruff check` + `ruff format --check`, `mypy` strict, `alembic upgrade` +

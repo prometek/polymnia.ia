@@ -10,7 +10,9 @@ artefact (scene audio WAV, rendered MP4) goes through, backed by `LocalStorage`
 """
 
 import os
+import time
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from api.storage import (
@@ -167,6 +169,31 @@ def s3_bucket() -> object:
         yield "polymnia-test-bucket"
 
 
+cryptography = pytest.importorskip(
+    "cryptography",
+    reason="cryptography is bundled with the s3 extra (CloudFront signing, issue #14)",
+)
+
+
+@pytest.fixture
+def cloudfront_private_key_path(tmp_path: Path) -> str:
+    """An ephemeral RSA key pair, PEM-encoded to a file — `signed_url()` reads the
+    CloudFront private key from a path (`STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH`), never
+    from an inline env var value, so tests need a real file on disk."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    path = tmp_path / "cloudfront_private_key.pem"
+    path.write_bytes(pem)
+    return str(path)
+
+
 def test_s3_storage_put_get_round_trip(s3_bucket: str) -> None:
     """Same calling code as LocalStorage (acceptance criterion 2): put() then get()
     returns the exact bytes, against a real (mocked) S3 API."""
@@ -203,14 +230,162 @@ def test_s3_storage_url_is_an_s3_uri(s3_bucket: str) -> None:
     assert storage.url("k") == f"s3://{s3_bucket}/k"
 
 
-def test_s3_storage_signed_url_is_a_fetchable_https_url_with_ttl(s3_bucket: str) -> None:
-    storage = S3Storage(s3_bucket)
+def test_s3_storage_signed_url_without_cloudfront_config_raises_config_error(
+    s3_bucket: str,
+) -> None:
+    """No silent fallback to an S3 presigned URL (issue #14 — the bucket must stay
+    private, only reachable via CloudFront): missing CloudFront config is a clear,
+    actionable error instead."""
+    storage = S3Storage(s3_bucket)  # no cloudfront_* kwargs
     storage.put("k", b"data")
-    signed = storage.signed_url("k", ttl_seconds=120)
-    assert signed.startswith("https://")
-    assert "k" in signed
-    # A presigned GET carries its expiry in the query string (SigV4).
-    assert "Expires" in signed or "X-Amz-Expires" in signed
+    with pytest.raises(StorageConfigError, match="CloudFront"):
+        storage.signed_url("k", ttl_seconds=120)
+
+
+def test_s3_storage_signed_url_with_invalid_pem_raises_config_error_not_a_traceback(
+    s3_bucket: str, tmp_path: Path
+) -> None:
+    """A corrupt/non-PEM private key file must fail loud with a typed, actionable
+    `StorageConfigError` naming the path — never let cryptography's own ValueError
+    (or a missing-file OSError) escape unhandled and surface as a 500 out of the
+    download route."""
+    bad_key_path = tmp_path / "not_a_key.pem"
+    bad_key_path.write_bytes(b"this is not a PEM private key")
+    storage = S3Storage(
+        s3_bucket,
+        cloudfront_domain="d123abc.cloudfront.net",
+        cloudfront_key_pair_id="APKAEXAMPLEKEYPAIR",
+        cloudfront_private_key_path=str(bad_key_path),
+    )
+    storage.put("k", b"data")
+    with pytest.raises(StorageConfigError, match="PEM"):
+        storage.signed_url("k", ttl_seconds=120)
+
+
+def test_s3_storage_signed_url_with_invalid_pem_fails_loud_on_every_call_not_just_the_first(
+    s3_bucket: str, tmp_path: Path
+) -> None:
+    """`_cloudfront_signer` is a `cached_property` (issue #14 fix round): it must
+    only ever cache a *successful* parse, never a raised exception. Guard against a
+    regression where the property silently swallows the error on the first call and
+    then returns `None`/a half-built signer on the second — a bad PEM must keep
+    failing loud on every subsequent `signed_url()` call against the same instance,
+    not just the first."""
+    bad_key_path = tmp_path / "not_a_key.pem"
+    bad_key_path.write_bytes(b"this is not a PEM private key")
+    storage = S3Storage(
+        s3_bucket,
+        cloudfront_domain="d123abc.cloudfront.net",
+        cloudfront_key_pair_id="APKAEXAMPLEKEYPAIR",
+        cloudfront_private_key_path=str(bad_key_path),
+    )
+    storage.put("k", b"data")
+
+    with pytest.raises(StorageConfigError, match="PEM"):
+        storage.signed_url("k", ttl_seconds=120)
+    # Second call, same instance: must raise again, not return a stale/garbage URL.
+    with pytest.raises(StorageConfigError, match="PEM"):
+        storage.signed_url("k", ttl_seconds=120)
+    # And the cached_property must never have stored anything on failure.
+    assert "_cloudfront_signer" not in storage.__dict__
+
+
+@pytest.mark.parametrize(
+    ("missing_kwarg", "expected_env_name"),
+    [
+        ("cloudfront_domain", "STORAGE_CLOUDFRONT_DOMAIN"),
+        ("cloudfront_key_pair_id", "STORAGE_CLOUDFRONT_KEY_PAIR_ID"),
+        ("cloudfront_private_key_path", "STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH"),
+    ],
+)
+def test_s3_storage_signed_url_with_partial_cloudfront_config_names_the_missing_var(
+    s3_bucket: str,
+    cloudfront_private_key_path: str,
+    missing_kwarg: str,
+    expected_env_name: str,
+) -> None:
+    """Even when only *one* of the three CloudFront settings is missing (not all
+    three), signed_url() must still fail loud and name that exact setting — a
+    partially-configured backend must never fall back to a plain S3 URL for the
+    settings it does have."""
+    kwargs: dict[str, str] = {
+        "cloudfront_domain": "d123abc.cloudfront.net",
+        "cloudfront_key_pair_id": "APKAEXAMPLEKEYPAIR",
+        "cloudfront_private_key_path": cloudfront_private_key_path,
+    }
+    del kwargs[missing_kwarg]
+    storage = S3Storage(s3_bucket, **kwargs)  # type: ignore[arg-type]
+    storage.put("k", b"data")
+    with pytest.raises(StorageConfigError, match=expected_env_name):
+        storage.signed_url("k", ttl_seconds=120)
+
+
+def test_s3_storage_signed_url_expires_reflects_the_configured_ttl(
+    s3_bucket: str, cloudfront_private_key_path: str
+) -> None:
+    """Acceptance criterion 2 (issue #14): the URL must actually expire after its
+    TTL — not merely carry an `Expires` param, but one whose value is derived from
+    `ttl_seconds`, not a constant. Decode it and check it lines up with now + ttl."""
+    storage = S3Storage(
+        s3_bucket,
+        cloudfront_domain="d123abc.cloudfront.net",
+        cloudfront_key_pair_id="APKAEXAMPLEKEYPAIR",
+        cloudfront_private_key_path=cloudfront_private_key_path,
+    )
+    storage.put("k", b"data")
+
+    before = int(time.time())
+    ttl_seconds = 120
+    signed = storage.signed_url("k", ttl_seconds=ttl_seconds)
+    after = int(time.time())
+
+    query = parse_qs(urlparse(signed).query)
+    expires = int(query["Expires"][0])
+    # Loose bound: the call itself takes negligible time, but avoid flakiness.
+    assert before + ttl_seconds <= expires <= after + ttl_seconds + 2
+    # And the expiry is genuinely in the future relative to when it was issued —
+    # a URL that were already expired on arrival would defeat the whole point.
+    assert expires > before
+
+
+def test_s3_storage_signed_url_ttl_is_not_hardcoded(
+    s3_bucket: str, cloudfront_private_key_path: str
+) -> None:
+    """Two different `ttl_seconds` must produce two different `Expires` values —
+    proves the TTL parameter is actually threaded through to the signature, not a
+    fixed expiry baked into the signer."""
+    storage = S3Storage(
+        s3_bucket,
+        cloudfront_domain="d123abc.cloudfront.net",
+        cloudfront_key_pair_id="APKAEXAMPLEKEYPAIR",
+        cloudfront_private_key_path=cloudfront_private_key_path,
+    )
+    storage.put("k", b"data")
+
+    short = storage.signed_url("k", ttl_seconds=60)
+    long = storage.signed_url("k", ttl_seconds=3600)
+
+    short_expires = int(parse_qs(urlparse(short).query)["Expires"][0])
+    long_expires = int(parse_qs(urlparse(long).query)["Expires"][0])
+    assert long_expires > short_expires
+    assert long_expires - short_expires == pytest.approx(3600 - 60, abs=2)
+
+
+def test_s3_storage_signed_url_is_a_cloudfront_url_with_ttl_and_key_pair(
+    s3_bucket: str, cloudfront_private_key_path: str
+) -> None:
+    storage = S3Storage(
+        s3_bucket,
+        cloudfront_domain="d123abc.cloudfront.net",
+        cloudfront_key_pair_id="APKAEXAMPLEKEYPAIR",
+        cloudfront_private_key_path=cloudfront_private_key_path,
+    )
+    storage.put("projects/p1/render.mp4", b"data")
+    signed = storage.signed_url("projects/p1/render.mp4", ttl_seconds=120)
+    assert signed.startswith("https://d123abc.cloudfront.net/projects/p1/render.mp4?")
+    assert "Key-Pair-Id=APKAEXAMPLEKEYPAIR" in signed
+    assert "Signature=" in signed
+    assert "Expires=" in signed  # canned-policy expiry, derived from ttl_seconds
 
 
 def test_get_storage_selects_s3_backend_via_env(
