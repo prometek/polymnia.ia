@@ -363,8 +363,20 @@ def create_job(video_id: str, job_type: str) -> str:
         return str(job.id)
 
 
+_STATUSES_CLEARING_STALE_ERROR = frozenset({"done", "retrying"})
+
+
 def set_job_status(job_id: str, status: str, error: str | None = None) -> None:
-    """Transition a job (queued -> running -> done/error). `error` set on failure only.
+    """Transition a job (queued -> running -> retrying -> done/error/dead). `error`
+    is written when explicitly passed (a failed attempt's message, or the DLQ's
+    final error via `dead`).
+
+    On a transition to `done` or `retrying` with no `error` argument, any stale
+    `error` left by a *previous, since-abandoned* attempt is cleared (issue #11):
+    otherwise a job that recovers within its retry budget would report `status=
+    done` alongside an error from an attempt that no longer describes its current
+    state. `dead` never clears it this way — a `dead` job's error is the final,
+    correct one and always passed explicitly by `DeadLetterTask.on_failure`.
 
     Publishes the new snapshot to Redis (issue #10) right after the commit, so
     `GET /jobs/{id}/stream` relays it in real time — single choke point, every
@@ -377,6 +389,8 @@ def set_job_status(job_id: str, status: str, error: str | None = None) -> None:
         job.status = status
         if error is not None:
             job.error = error
+        elif status in _STATUSES_CLEARING_STALE_ERROR:
+            job.error = None
         s.add(job)
         s.commit()  # updated_at bumped by onupdate=func.now()
         job_dict = _job_to_dict(job)

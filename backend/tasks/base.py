@@ -38,9 +38,7 @@ class DeadLetterTask(Task):  # type: ignore[misc]  # celery.Task has no stubs (i
         kwargs: dict[str, Any],
         einfo: Any,
     ) -> None:
-        # Convention shared by every task using this base: job_id is the first
-        # positional arg (tasks/generation.py, tasks/render.py).
-        job_id = args[0]
+        job_id = self._extract_job_id(args, kwargs)
         db.set_job_status(job_id, "dead", error=str(exc))
         logger.error(
             "job %s exhausted retries -> dead-letter queue (task=%s, task_id=%s)",
@@ -48,4 +46,22 @@ class DeadLetterTask(Task):  # type: ignore[misc]  # celery.Task has no stubs (i
             self.name,
             task_id,
             exc_info=exc,
+        )
+
+    def _extract_job_id(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+        """Convention shared by every task using this base: `job_id` is the first
+        positional arg (tasks/generation.py, tasks/render.py) -- but a task can in
+        principle be invoked kwargs-only (`.delay(job_id=...)`) or, if misconfigured,
+        with neither. Fail loudly rather than raising an opaque `IndexError`/`KeyError`
+        deep inside a failure handler, which would otherwise silently skip the DLQ
+        transition and leave the job stuck on its last transient status forever.
+        """
+        if args:
+            return str(args[0])
+        if "job_id" in kwargs:
+            return str(kwargs["job_id"])
+        raise ValueError(
+            f"DeadLetterTask.on_failure for task {self.name!r}: no job_id found in "
+            f"args={args!r} kwargs={kwargs!r} -- every task using this base must be "
+            "called with job_id as its first positional argument or a 'job_id' kwarg"
         )
