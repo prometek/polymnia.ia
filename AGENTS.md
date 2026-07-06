@@ -16,7 +16,7 @@
 - Framework(s): FastAPI (API) · Remotion 4 + React 19 (headless render worker)
 - Database: PostgreSQL via SQLModel (SQLAlchemy + psycopg 3 driver)
 - Package manager: `uv` (backend) · `npm` (render-motor)
-- Key external services: Mistral LLM (`mistral-medium-latest`) · Mistral Voxtral TTS · Object Storage/CDN (target)
+- Key external services: Mistral LLM (`mistral-medium-latest`) · Mistral Voxtral TTS · Object Storage/CDN (`Storage` abstraction implemented, issue #12 — local dev / S3 prod; CDN + data migration still pending)
 
 ## Environment & commands
 
@@ -34,6 +34,9 @@ Two subprojects with separate toolchains under a single git repo at the root.
 - DB migrations:       `uv run alembic upgrade head` (apply) · `uv run alembic revision --autogenerate -m "..."` (new) — see `backend/alembic/README`
 - Dev schema shortcut: set `POLYMNIA_DEV_CREATE_ALL=1` to build schema via `create_all` at startup (prod uses Alembic; create_all is a no-op without the flag)
 - Pre-commit:          `uv run pre-commit install --install-hooks --hook-type commit-msg`
+- Install S3 storage extra: `uv sync --extra s3`   # only needed for `STORAGE_BACKEND=s3` (pulls in `boto3`); local dev/CI don't need it
+- Storage backend (issue #12): `STORAGE_BACKEND=local|s3` (default `local`, under `backend/out/storage/` or `STORAGE_LOCAL_ROOT`).
+  For `s3`: `STORAGE_S3_BUCKET` (required), `STORAGE_S3_REGION`, `STORAGE_S3_ENDPOINT_URL` (e.g. moto/LocalStack for tests). See `backend/api/storage.py`.
 
 **Render-motor (`render-motor/`)**
 - Install deps:        `npm install`
@@ -58,11 +61,13 @@ Two subprojects with separate toolchains under a single git repo at the root.
   that form somewhere it could be logged/captured)
 - Worker logs:          `docker compose logs -f render-worker` → look for
   `celery@... ready.` and `[queues] .> render`
-- Known limitation: the rendered MP4 path returned by `render_project()` is a
-  container-local absolute path (`/app/render-motor/out/...`); the compose
-  `render-out` named volume is a POC bridge to make it reachable outside the
-  container — real cross-service delivery needs Object Storage/CDN (PRO-12,
-  Étape 2).
+- Known limitation: `render_project()` still writes the rendered MP4 to a
+  container-local path (`/app/render-motor/out/...`) before promoting it into
+  Storage (`storage.put`, issue #12) — the compose `render-out` named volume
+  remains a POC bridge for that intermediate local write, not the delivery
+  path. Cross-service delivery now goes through the `Storage` abstraction
+  (`STORAGE_BACKEND=local|s3`, see above); actual data migration to S3 and a
+  CDN in front of it are still pending (PRO-12/14, Étape 2).
 
 > CI is live: `.github/workflows/ci.yml` runs on PRs + `main` — backend Python
 > (`ruff check` + `ruff format --check`, `mypy` strict, `alembic upgrade` +

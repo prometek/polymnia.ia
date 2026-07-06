@@ -9,12 +9,12 @@ its own audio dir and its own render-input + MP4, so projects don't collide.
 import json
 import logging
 import os
-import shutil
 import subprocess
 import sys
 from typing import Any
 
 from . import db
+from .storage import get_storage
 
 logger = logging.getLogger("polymnia.service")
 
@@ -39,8 +39,36 @@ def _audio_dir(pid: str) -> str:
     return d
 
 
+def _audio_key(pid: str, order: int) -> str:
+    return f"projects/{pid}/audio/scene-{order}.wav"
+
+
+def _video_key(pid: str) -> str:
+    return f"projects/{pid}/render.mp4"
+
+
 def _total(scenes: list[Scene]) -> float:
     return round(sum(float(s["timing"]["duration_s"]) for s in scenes), 3)
+
+
+def _voiceover_and_store(pid: str, scene: Scene) -> Scene:
+    """Run TTS for one scene (pipeline/tts.py) then persist its WAV via Storage
+    (issue #12), replacing `timing.audio_path` with the storage key.
+
+    tts.py still writes the WAV to a local scratch dir first: it measures the WAV
+    duration with the stdlib `wave` module and, for cued layouts, force-aligns the
+    audio, both of which need a real file on disk. That scratch file is not the
+    artefact of record — this is the one place that promotes it into Storage, so
+    every other reader (render packing, future replay) goes through the interface.
+    """
+    voiced = tts.voiceover_scene(scene, _audio_dir(pid))
+    staged_path = voiced["timing"]["audio_path"]
+    with open(staged_path, "rb") as f:
+        data = f.read()
+    key = _audio_key(pid, voiced["order"])
+    get_storage().put(key, data)
+    voiced["timing"]["audio_path"] = key
+    return voiced
 
 
 def generate(pid: str, input_text: str, kit: Kit, job_id: str) -> tuple[list[Scene], float]:
@@ -56,8 +84,7 @@ def generate(pid: str, input_text: str, kit: Kit, job_id: str) -> tuple[list[Sce
     db.set_job_step(job_id, "fill")
     filled = [fill.fill_scene(s, kit) for s in scenes_outline]
     db.set_job_step(job_id, "tts")
-    audio_dir = _audio_dir(pid)
-    scenes = [tts.voiceover_scene(s, audio_dir) for s in filled]
+    scenes = [_voiceover_and_store(pid, s) for s in filled]
     return scenes, _total(scenes)
 
 
@@ -79,7 +106,8 @@ def run_generation(pid: str, input_text: str, kit: Kit, job_id: str) -> None:
 
 
 def run_render(pid: str, scenes: list[Scene], kit: Kit, job_id: str) -> None:
-    """Queue job: render the MP4 and persist its path with a status transition.
+    """Queue job: render the MP4, persist it via Storage and its key, with a status
+    transition.
 
     Owns the *video* status (rendering -> ready/error). Re-raises after marking the
     video errored so the caller (Celery task) can fail the job and the broker retry.
@@ -105,7 +133,7 @@ def edit_ai(pid: str, scenes: list[Scene], order: int, instruction: str, kit: Ki
     """Scoped AI edit: regenerate ONE scene from a prompt (re-TTS + re-align). Persists it."""
     idx = _find(scenes, order)
     edited = fill.fill_scene(scenes[idx], kit, instruction=instruction)
-    edited = tts.voiceover_scene(edited, _audio_dir(pid))
+    edited = _voiceover_and_store(pid, edited)
     scenes[idx] = edited
     db.upsert_scene(pid, edited)
     db.set_total(pid, _total(scenes))
@@ -130,14 +158,15 @@ def edit_direct(
         edit_scene._swap_icons(props, swap)
     scenes[idx]["asset_refs"] = collect_asset_refs(props, kit)
     if any(p.startswith("narration") for p, _ in pairs):
-        scenes[idx] = tts.voiceover_scene(scenes[idx], _audio_dir(pid))
+        scenes[idx] = _voiceover_and_store(pid, scenes[idx])
     db.upsert_scene(pid, scenes[idx])
     db.set_total(pid, _total(scenes))
     return scenes[idx]
 
 
 def render_project(pid: str, scenes: list[Scene], kit: Kit, job_id: str) -> str:
-    """Build a project-scoped render-input and render the full MP4. Returns its path.
+    """Build a project-scoped render-input and render the full MP4. Returns its
+    Storage key (issue #12) — not a filesystem path.
 
     Reports progress on `job_id` (issue #9): 'packing' while building render-input and
     copying audio, 'render' for the Remotion subprocess itself.
@@ -152,6 +181,7 @@ def render_project(pid: str, scenes: list[Scene], kit: Kit, job_id: str) -> str:
         resolve_content,
     )
 
+    storage = get_storage()
     db.set_job_step(job_id, "packing")
     pub = os.path.join(PUBLIC, f"proj-{pid}")
     os.makedirs(pub, exist_ok=True)
@@ -159,11 +189,13 @@ def render_project(pid: str, scenes: list[Scene], kit: Kit, job_id: str) -> str:
 
     out_scenes = []
     for s in scenes:
-        src = s["timing"]["audio_path"]
-        if not os.path.isabs(src):
-            src = os.path.join(BACKEND, src)
-        name = os.path.basename(src)
-        shutil.copyfile(src, os.path.join(pub, name))
+        key = s["timing"]["audio_path"]  # storage key, set by _voiceover_and_store
+        name = os.path.basename(key)
+        # Remotion is a headless subprocess reading from render-motor/public/ on local
+        # disk (its `staticFile()` mechanism) — this materialization stays local
+        # regardless of backend; the audio itself is only ever read via Storage.
+        with open(os.path.join(pub, name), "wb") as f:
+            f.write(storage.get(key))
         out_scenes.append(
             {
                 "type": s["type"],
@@ -200,4 +232,11 @@ def render_project(pid: str, scenes: list[Scene], kit: Kit, job_id: str) -> str:
         cwd=RENDER_DIR,
         check=True,
     )
-    return os.path.join(RENDER_DIR, "out", f"{pid}.mp4")
+    # Remotion writes the MP4 to its own local out/ dir (subprocess, can't target S3
+    # directly) — this is the one place that promotes that output into Storage.
+    rendered_path = os.path.join(RENDER_DIR, "out", f"{pid}.mp4")
+    with open(rendered_path, "rb") as f:
+        mp4_data = f.read()
+    video_key = _video_key(pid)
+    storage.put(video_key, mp4_data)
+    return video_key

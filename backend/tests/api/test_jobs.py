@@ -5,6 +5,7 @@ instead of running in the request thread, and a `jobs` row must track the work
 through its lifecycle (queued -> running -> done/error).
 """
 
+import os
 import subprocess
 import uuid
 from collections.abc import Callable, Iterator
@@ -14,6 +15,7 @@ import pytest
 from api import db, service
 from api.celery_app import celery_app
 from api.session import engine
+from api.storage import get_storage
 from sqlalchemy import text
 from starlette.testclient import TestClient
 from tasks import generation
@@ -313,7 +315,16 @@ def test_generation_step_progresses_through_pipeline(
         return {**scene, "composition": "centered", "props": {}, "asset_refs": []}
 
     def fake_voiceover_scene(scene: dict[str, Any], audio_dir: str) -> dict[str, Any]:
-        return {**scene, "timing": {"duration_s": 1.0, "audio_path": "audio/s0.wav"}}
+        # Real tts.voiceover_scene writes a real WAV under `audio_dir` and returns
+        # that on-disk path (api/service.py::_voiceover_and_store then reads it and
+        # promotes it into Storage under a key, issue #12) — a fake that returns a
+        # path nothing was ever written to breaks that promotion with a
+        # FileNotFoundError. Match the real contract here.
+        os.makedirs(audio_dir, exist_ok=True)
+        path = os.path.join(audio_dir, f"scene-{scene.get('order')}.wav")
+        with open(path, "wb") as f:
+            f.write(b"fake-wav-bytes")
+        return {**scene, "timing": {"duration_s": 1.0, "audio_path": path}}
 
     monkeypatch.setattr(service.generate_plan, "generate_plan", fake_generate_plan)
     monkeypatch.setattr(service.outline, "build_outline", fake_build_outline)
@@ -338,8 +349,18 @@ def test_generation_step_progresses_through_pipeline(
     row = _job_row(pid)
     assert row["status"] == "done"
     assert row["step"] == "tts"  # last step written, still visible after completion
-    assert db.get_video(pid, uid) is not None
-    assert db.get_video(pid, uid)["status"] == "ready"
+    video = db.get_video(pid, uid)
+    assert video is not None
+    assert video["status"] == "ready"
+
+    # issue #12: the persisted scene's audio_path is a Storage KEY, not the tts.py
+    # scratch filesystem path — and the bytes are actually retrievable through the
+    # abstraction, not just present on disk at the scratch location.
+    scene = video["scenes"][0]
+    audio_key = scene["timing"]["audio_path"]
+    assert audio_key == f"projects/{pid}/audio/scene-0.wav"
+    assert not os.path.isabs(audio_key)
+    assert get_storage().get(audio_key) == b"fake-wav-bytes"
 
 
 def test_render_step_progresses_through_pipeline(
@@ -357,15 +378,18 @@ def test_render_step_progresses_through_pipeline(
     vid = db.uuid.uuid4().hex[:12]
     db.create_video(vid, uid, version_id, "v")
 
-    audio_src = tmp_path / "s0.wav"
-    audio_src.write_bytes(b"not-a-real-wav")
+    # issue #12: `timing.audio_path` is a Storage KEY (set by generation, via
+    # _voiceover_and_store), never a raw filesystem path — put the bytes through
+    # the same abstraction render_project() will read them back through.
+    audio_key = f"projects/{vid}/audio/scene-0.wav"
+    get_storage().put(audio_key, b"not-a-real-wav")
     scene = {
         "order": 0,
         "type": "statement",
         "composition": "centered",
         "props": {},
         "asset_refs": [],
-        "timing": {"duration_s": 1.0, "audio_path": str(audio_src)},
+        "timing": {"duration_s": 1.0, "audio_path": audio_key},
     }
     db.replace_scenes(vid, [scene])
     as_user(uid)
@@ -379,12 +403,19 @@ def test_render_step_progresses_through_pipeline(
     monkeypatch.setattr(pack_render, "PUBLIC", str(public_dir))
     monkeypatch.setattr(pack_render, "RENDER_DIR", str(render_dir))
 
+    rendered_mp4_bytes = b"fake-mp4-bytes"
     subprocess_calls: list[list[str]] = []
 
     def fake_subprocess_run(
         cmd: list[str], cwd: str | None = None, check: bool | None = None
     ) -> subprocess.CompletedProcess[bytes]:
         subprocess_calls.append(cmd)
+        # Stand in for the real Remotion subprocess, which writes the MP4 to its own
+        # local out/ dir (render_project() then promotes that file into Storage,
+        # issue #12) — write it here so that promotion has something real to read.
+        out_dir = render_dir / "out"
+        out_dir.mkdir(exist_ok=True)
+        (out_dir / f"{vid}.mp4").write_bytes(rendered_mp4_bytes)
         return subprocess.CompletedProcess(cmd, 0)
 
     monkeypatch.setattr(service.subprocess, "run", fake_subprocess_run)
@@ -407,4 +438,16 @@ def test_render_step_progresses_through_pipeline(
     row = _job_row(vid)
     assert row["status"] == "done"
     assert row["step"] == "render"  # last step written, still visible after completion
-    assert db.get_video(vid, uid)["status"] == "ready"
+    video = db.get_video(vid, uid)
+    assert video["status"] == "ready"
+
+    # issue #12: mp4_path persisted in the DB is a Storage KEY, not the Remotion
+    # subprocess's local out/ path — and the bytes are retrievable both directly
+    # through Storage and through the real download endpoint (byte-identical).
+    video_key = video["mp4_path"]
+    assert video_key == f"projects/{vid}/render.mp4"
+    assert get_storage().get(video_key) == rendered_mp4_bytes
+
+    download = client.get(f"/projects/{vid}/video")
+    assert download.status_code == 200
+    assert download.content == rendered_mp4_bytes

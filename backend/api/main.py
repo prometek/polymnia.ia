@@ -24,15 +24,21 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 from tasks import generation
 from tasks import render as render_jobs
 
 from . import db, job_events, queue_metrics, service
+from .storage import StorageKeyNotFoundError, get_storage
 
 DEV_EMAIL = "dev@polymnia.local"
+
+# How long a redirect to an S3 signed URL stays valid (issue #12) — long enough for a
+# client to start streaming the video, short enough that a leaked link doesn't grant
+# durable access to a private bucket object.
+VIDEO_SIGNED_URL_TTL_S = 300
 
 
 @asynccontextmanager
@@ -227,10 +233,40 @@ def render(pid: str, video: Video, kit: Kit) -> JobStarted:
 
 
 @app.get("/projects/{pid}/video")
-def download_video(video: Video) -> FileResponse:
-    if not video["mp4_path"] or not os.path.exists(video["mp4_path"]):
+def download_video(video: Video) -> Response:
+    """Serve the rendered MP4 via Storage (issue #12), not a raw filesystem path —
+    `mp4_path` is a storage key, resolved by whichever backend `STORAGE_BACKEND`
+    selects.
+
+    The two backends are served differently on purpose (Storage.local_path is the
+    seam): local dev streams the file straight off disk via `FileResponse`, which
+    gives HTTP Range support (in-browser seeking) for free and never loads the whole
+    MP4 into process memory; S3 has no local filesystem representation, so we redirect
+    to a short-lived signed URL instead of proxying bytes through this process
+    (architecture §12 — private bucket, CDN/signed-URL delivery).
+    """
+    key = video["mp4_path"]
+    if not key:
         raise HTTPException(404, "no rendered video yet")
-    return FileResponse(video["mp4_path"], media_type="video/mp4", filename=f"{video['id']}.mp4")
+    storage = get_storage()
+    filename = f"{video['id']}.mp4"
+    try:
+        path = storage.local_path(key)
+        # `local_path` returns None for backends with no filesystem representation
+        # (S3) without checking existence — verify here so a dangling key (recorded
+        # in the DB but never uploaded, or since deleted from the bucket) 404s the
+        # same way the local backend already does, instead of redirecting to a
+        # signed URL for an object that isn't there. One extra round trip
+        # (`head_object`), paid only on this branch — local dev never hits it.
+        if path is None and not storage.exists(key):
+            raise StorageKeyNotFoundError(key)
+    except StorageKeyNotFoundError as exc:
+        # Dangling `mp4_path` (recorded in the DB but absent from the backing store)
+        # — surface the same 404 a caller would see for "never rendered".
+        raise HTTPException(404, "no rendered video yet") from exc
+    if path is not None:
+        return FileResponse(path, media_type="video/mp4", filename=filename)
+    return RedirectResponse(storage.signed_url(key, VIDEO_SIGNED_URL_TTL_S), status_code=307)
 
 
 # --- Metrics -----------------------------------------------------------------

@@ -121,6 +121,7 @@ class Video(SQLModel, table=True):
     total_duration_s: float = Field(
         default=0.0, sa_column=Column(REAL, nullable=False, server_default=text("0"))
     )
+    # Storage key (issue #12), not a filesystem path — resolved via api/storage.py.
     mp4_path: str | None = Field(default=None, sa_column=Column(Text))
     created_at: datetime | None = _created_at()
     updated_at: datetime | None = Field(
