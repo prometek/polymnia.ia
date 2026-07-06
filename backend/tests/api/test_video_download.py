@@ -124,6 +124,37 @@ def test_download_video_404_when_key_recorded_but_missing_from_storage(
     assert resp.status_code == 404
 
 
+def test_download_video_404_when_key_recorded_but_missing_from_s3_storage(
+    client: TestClient, as_user: Callable[[str], None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same contract as the LocalStorage case above, against the S3 backend: a
+    dangling `mp4_path` (recorded in the DB but never actually uploaded, or since
+    deleted from the bucket) must 404 — the whole point of the Storage abstraction
+    is that callers (and callers of the API) never have to care which backend is
+    behind a key, so this must not regress into a 307 redirect to a signed URL for
+    an object that doesn't exist."""
+    boto3 = pytest.importorskip(
+        "boto3", reason="boto3 is an optional dependency (`uv sync --extra s3`)"
+    )
+    moto = pytest.importorskip("moto", reason="moto (dev dependency) mocks S3")
+
+    with moto.mock_aws():
+        bucket = "polymnia-video-download-dangling-test"
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket)
+        monkeypatch.setenv("STORAGE_BACKEND", "s3")
+        monkeypatch.setenv("STORAGE_S3_BUCKET", bucket)
+        monkeypatch.setenv("STORAGE_S3_REGION", "us-east-1")
+
+        uid = db.ensure_user("s3-dangling@test.local")
+        vid = _seed_project(uid)
+        as_user(uid)
+
+        db.set_mp4(vid, f"projects/{vid}/render.mp4")  # never actually put() into storage
+
+        resp = client.get(f"/projects/{vid}/video", follow_redirects=False)
+        assert resp.status_code == 404
+
+
 def test_download_video_404_for_other_users_project(
     client: TestClient, as_user: Callable[[str], None]
 ) -> None:
