@@ -278,3 +278,57 @@ def test_render_project_local_intermediate_mp4_is_not_left_on_disk_after_promoti
         f"intermediate local MP4 still present at {local_rendered_path!r} after "
         "promotion into Storage — acceptance criterion (a) is not met"
     )
+
+
+def test_render_project_scratch_is_still_wiped_when_storage_put_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """`_cleanup_render_scratch` runs in a `finally` around the whole render body
+    (api/service.py) specifically so a failed promotion can't leave scratch behind
+    either — assert that guarantee directly: if `storage.put` blows up promoting the
+    MP4, the local render-input JSON and Remotion output are still gone, and the
+    original exception still propagates (cleanup must not swallow the failure)."""
+    uid = db.ensure_user("render-cleanup-failure@test.local")
+    vid = _seed_project(uid, kit_id="kit-cleanup-failure")
+    audio_key = f"projects/{vid}/audio/scene-0.wav"
+    get_storage().put(audio_key, b"not-a-real-wav")
+    db.replace_scenes(vid, [_scene(0, audio_key)])
+
+    public_dir = tmp_path / "public"
+    render_dir = tmp_path / "render"
+    render_dir.mkdir()
+    monkeypatch.setattr(pack_render, "PUBLIC", str(public_dir))
+    monkeypatch.setattr(pack_render, "RENDER_DIR", str(render_dir))
+
+    mp4_bytes = b"never-promoted-fake-mp4"
+    monkeypatch.setattr(
+        service.subprocess, "run", _fake_subprocess_run_writing_mp4(str(render_dir), vid, mp4_bytes)
+    )
+
+    real_storage = get_storage()
+
+    class _PutFailsStorage:
+        """Delegates reads to the real (test-isolated) storage so scene audio can
+        still be resolved, but fails the one `put` call that promotes the MP4."""
+
+        def get(self, key: str) -> bytes:
+            return real_storage.get(key)
+
+        def put(self, key: str, data: bytes) -> None:
+            raise RuntimeError("simulated Storage outage during MP4 promotion")
+
+    monkeypatch.setattr(service, "get_storage", lambda: _PutFailsStorage())
+
+    scenes = db.get_scenes(vid)
+    job_id = db.create_job(vid, "render")
+    with pytest.raises(RuntimeError, match="simulated Storage outage"):
+        service.render_project(vid, scenes, _kit(), job_id)
+
+    pub_dir = os.path.join(str(public_dir), f"proj-{vid}")
+    props_path = os.path.join(str(render_dir), f"render-input-{vid}.json")
+    local_rendered_path = os.path.join(str(render_dir), "out", f"{vid}.mp4")
+    assert not os.path.isdir(pub_dir), "materialized audio dir survived a failed promotion"
+    assert not os.path.isfile(props_path), "render-input JSON survived a failed promotion"
+    assert not os.path.isfile(local_rendered_path), (
+        "Remotion's local MP4 output survived a failed promotion"
+    )
