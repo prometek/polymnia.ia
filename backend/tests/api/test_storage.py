@@ -242,6 +242,26 @@ def test_s3_storage_signed_url_without_cloudfront_config_raises_config_error(
         storage.signed_url("k", ttl_seconds=120)
 
 
+def test_s3_storage_signed_url_with_invalid_pem_raises_config_error_not_a_traceback(
+    s3_bucket: str, tmp_path: Path
+) -> None:
+    """A corrupt/non-PEM private key file must fail loud with a typed, actionable
+    `StorageConfigError` naming the path — never let cryptography's own ValueError
+    (or a missing-file OSError) escape unhandled and surface as a 500 out of the
+    download route."""
+    bad_key_path = tmp_path / "not_a_key.pem"
+    bad_key_path.write_bytes(b"this is not a PEM private key")
+    storage = S3Storage(
+        s3_bucket,
+        cloudfront_domain="d123abc.cloudfront.net",
+        cloudfront_key_pair_id="APKAEXAMPLEKEYPAIR",
+        cloudfront_private_key_path=str(bad_key_path),
+    )
+    storage.put("k", b"data")
+    with pytest.raises(StorageConfigError, match="PEM"):
+        storage.signed_url("k", ttl_seconds=120)
+
+
 @pytest.mark.parametrize(
     ("missing_kwarg", "expected_env_name"),
     [

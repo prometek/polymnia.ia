@@ -18,7 +18,8 @@ map them to their own addressing (a local file path, an S3 object key).
 import os
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime, timedelta
-from functools import cache
+from functools import cache, cached_property
+from typing import Any
 
 # backend/api/storage.py -> backend/
 _BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -236,6 +237,30 @@ class S3Storage(Storage):
                 "STORAGE_BACKEND=s3 requires CloudFront signed-URL config; missing: "
                 + ", ".join(missing)
             )
+        resource_url = f"https://{self._cloudfront_domain}/{key}"
+        expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+        signed: str = self._cloudfront_signer.generate_presigned_url(
+            resource_url, date_less_than=expires_at
+        )
+        return signed
+
+    @cached_property
+    def _cloudfront_signer(self) -> Any:
+        """The `CloudFrontSigner` for this instance, built once and reused.
+
+        `S3Storage` itself is memoized per resolved config (`_cached_s3_storage`),
+        so without this cache every `signed_url()` call would re-read the PEM file
+        from disk and re-parse the RSA key for no reason — wasted I/O/CPU on every
+        video download. Declared `Any`: `botocore`/`cryptography` are optional,
+        lazily-imported dependencies (only needed for the `s3` backend, see
+        pyproject.toml) with no bundled stubs under `ignore_missing_imports`.
+
+        Only called once `signed_url()` has confirmed the three CloudFront settings
+        are non-empty — the asserts below just narrow those `str | None` attributes
+        for mypy, they don't re-validate. A `cached_property` never caches a raised
+        exception (it only stores a value on success), so a config/PEM error here
+        re-raises on every subsequent call — the fail-loud contract holds either way.
+        """
         # cryptography is declared under the `s3` extra alongside boto3 (pyproject.toml)
         # — imported lazily, at call time, for the same reason boto3 is imported lazily
         # in __init__: callers that only put()/get()/exists() (e.g. the render worker)
@@ -252,9 +277,22 @@ class S3Storage(Storage):
                 "`uv sync --extra s3`."
             ) from exc
 
-        assert self._cloudfront_private_key_path is not None  # narrowed by the check above
-        with open(self._cloudfront_private_key_path, "rb") as f:
-            private_key = load_pem_private_key(f.read(), password=None)
+        assert self._cloudfront_private_key_path is not None  # narrowed by signed_url()'s check
+        assert self._cloudfront_key_pair_id is not None
+        try:
+            with open(self._cloudfront_private_key_path, "rb") as f:
+                private_key = load_pem_private_key(f.read(), password=None)
+        except (OSError, ValueError, TypeError) as exc:
+            # OSError: missing/unreadable file. ValueError/TypeError: cryptography's
+            # own errors for corrupt/encrypted/non-PEM content. All three would
+            # otherwise escape as an unhandled 500 out of the download route
+            # (which only catches StorageKeyNotFoundError) — surfaced here as the
+            # same typed, actionable config error, naming the path but never the
+            # key's bytes.
+            raise StorageConfigError(
+                f"STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH ({self._cloudfront_private_key_path!r}) "
+                f"could not be read as a PEM private key: {exc}"
+            ) from exc
         if not isinstance(private_key, RSAPrivateKey):
             raise StorageConfigError(
                 f"STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH ({self._cloudfront_private_key_path!r}) "
@@ -267,11 +305,7 @@ class S3Storage(Storage):
             # accepts for signed URLs/cookies.
             return private_key.sign(message, padding.PKCS1v15(), hashes.SHA1())
 
-        signer = CloudFrontSigner(self._cloudfront_key_pair_id, rsa_signer)
-        resource_url = f"https://{self._cloudfront_domain}/{key}"
-        expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
-        signed: str = signer.generate_presigned_url(resource_url, date_less_than=expires_at)
-        return signed
+        return CloudFrontSigner(self._cloudfront_key_pair_id, rsa_signer)
 
     def local_path(self, key: str) -> str | None:
         # S3 objects have no local filesystem representation — callers must use
