@@ -12,6 +12,7 @@ from typing import Any
 
 from sqlmodel import Session, col, select
 
+from . import job_events
 from .models import Asset, BrandKit, BrandKitVersion, Job, Scene, User, Video
 from .session import engine, init_db
 
@@ -363,7 +364,12 @@ def create_job(video_id: str, job_type: str) -> str:
 
 
 def set_job_status(job_id: str, status: str, error: str | None = None) -> None:
-    """Transition a job (queued -> running -> done/error). `error` set on failure only."""
+    """Transition a job (queued -> running -> done/error). `error` set on failure only.
+
+    Publishes the new snapshot to Redis (issue #10) right after the commit, so
+    `GET /jobs/{id}/stream` relays it in real time — single choke point, every
+    caller (tasks/generation.py, tasks/render.py) gets this for free.
+    """
     with Session(engine) as s:
         job = s.get(Job, uuid.UUID(job_id))
         if job is None:
@@ -373,12 +379,17 @@ def set_job_status(job_id: str, status: str, error: str | None = None) -> None:
             job.error = error
         s.add(job)
         s.commit()  # updated_at bumped by onupdate=func.now()
+        job_dict = _job_to_dict(job)
+    job_events.publish_job_event(job_dict)
 
 
 def set_job_step(job_id: str, step: str) -> None:
     """Record the worker's current step (generation: plan/outline/fill/tts; render:
     packing/render — issue #9). Best-effort no-op if the job vanished, same as
-    `set_job_status`: progress reporting never blocks the pipeline."""
+    `set_job_status`: progress reporting never blocks the pipeline.
+
+    Publishes the new snapshot (issue #10), same choke point as `set_job_status`.
+    """
     with Session(engine) as s:
         job = s.get(Job, uuid.UUID(job_id))
         if job is None:
@@ -386,6 +397,8 @@ def set_job_step(job_id: str, step: str) -> None:
         job.step = step
         s.add(job)
         s.commit()
+        job_dict = _job_to_dict(job)
+    job_events.publish_job_event(job_dict)
 
 
 def _job_to_dict(j: Job) -> dict[str, Any]:

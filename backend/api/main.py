@@ -25,12 +25,12 @@ from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from tasks import generation
 from tasks import render as render_jobs
 
-from . import db, service
+from . import db, job_events, service
 
 DEV_EMAIL = "dev@polymnia.local"
 
@@ -239,3 +239,28 @@ def download_video(video: Video) -> FileResponse:
 @app.get("/jobs/{job_id}", response_model=JobStatus)
 def job_status(job: JobRead) -> dict[str, Any]:
     return job
+
+
+@app.get("/jobs/{job_id}/stream")
+async def job_status_stream(job_id: str, job: JobRead, user_id: UserId) -> StreamingResponse:
+    """Real-time relay of a job's status/step transitions via SSE (issue #10) —
+    the polling endpoint above stays the fallback (ticket scope), unchanged.
+
+    `async def` on purpose, unlike the sync `def` convention for this API's other
+    handlers: this is a long-lived stream waiting on Redis pub/sub, not a short
+    blocking DB call, so it must not occupy a threadpool thread for its whole
+    lifetime. `job` (via `require_job`, a sync dependency FastAPI already runs in
+    the threadpool) still checks existence/ownership once, up front, before the
+    stream opens — its value isn't otherwise used: `event_stream` takes its own
+    fresh snapshot *after* subscribing (see its docstring for why the ordering
+    matters), via the injected `snapshot` callback below rather than this value,
+    to avoid ever emitting a snapshot older than the point we started listening.
+    """
+    return StreamingResponse(
+        job_events.event_stream(job_id, lambda: db.get_job(job_id, user_id)),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable proxy buffering (e.g. nginx) of the stream
+        },
+    )
