@@ -34,11 +34,14 @@ services:
       # worker must reach Redis by its compose service name, not localhost.
       REDIS_URL: redis://redis:6379/0
     volumes:
-      # Shared render output so a rendered MP4 (written by this container at
-      # /app/render-motor/out) can be picked up outside it. This is the POC
-      # bridge only: the path api/service.py::render_project() returns is a
-      # container-local absolute path, so cross-container/host download still
-      # needs Object Storage/CDN (PRO-12, Étape 2) — out of scope here.
+      # Intermediate render output only (PRO-13): `npx remotion render` still
+      # writes the MP4 to this container-local path first, but
+      # api/service.py::render_project() promotes it into Storage
+      # (`storage.put`, STORAGE_BACKEND=local|s3) before returning — the key
+      # it returns (persisted as videos.mp4_path) is what other
+      # containers/hosts actually resolve. This volume is a debugging
+      # convenience for inspecting the raw Remotion output, not the delivery
+      # path; nothing reads the MP4 back out of it.
       - render-out:/app/render-motor/out
 
 volumes:
