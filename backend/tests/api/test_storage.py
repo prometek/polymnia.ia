@@ -10,6 +10,7 @@ artefact (scene audio WAV, rendered MP4) goes through, backed by `LocalStorage`
 """
 
 import os
+from pathlib import Path
 
 import pytest
 from api.storage import (
@@ -18,6 +19,7 @@ from api.storage import (
     Storage,
     StorageBackendUnavailableError,
     StorageConfigError,
+    StorageInvalidKeyError,
     StorageKeyNotFoundError,
     get_storage,
 )
@@ -60,6 +62,26 @@ def test_local_storage_get_missing_key_raises_not_found(tmp_path: object) -> Non
     assert exc_info.value.key == "nope"
 
 
+def test_local_storage_put_rejects_key_escaping_root_via_parent_segments(
+    tmp_path: Path,
+) -> None:
+    """A `../` key must never write outside the storage root — refused with a typed
+    error rather than silently escaping (path traversal)."""
+    storage = LocalStorage(str(tmp_path))
+    with pytest.raises(StorageInvalidKeyError) as exc_info:
+        storage.put("../escape.bin", b"malicious")
+    assert exc_info.value.key == "../escape.bin"
+    assert not (tmp_path.parent / "escape.bin").exists()
+
+
+def test_local_storage_get_rejects_key_escaping_root_via_parent_segments(
+    tmp_path: Path,
+) -> None:
+    storage = LocalStorage(str(tmp_path))
+    with pytest.raises(StorageInvalidKeyError):
+        storage.get("../../etc/passwd")
+
+
 def test_local_storage_url_is_a_file_uri(tmp_path: object) -> None:
     storage = LocalStorage(str(tmp_path))
     storage.put("k", b"data")
@@ -75,6 +97,20 @@ def test_local_storage_signed_url_is_directly_fetchable_locally(tmp_path: object
     storage.put("k", b"payload")
     signed = storage.signed_url("k", ttl_seconds=60)
     assert signed == storage.url("k")
+
+
+def test_local_storage_local_path_returns_the_backing_file(tmp_path: Path) -> None:
+    """Lets a caller (the MP4 download route) stream the file directly, e.g. via
+    `FileResponse`, instead of loading it whole into memory via `get()`."""
+    storage = LocalStorage(str(tmp_path))
+    storage.put("k", b"payload")
+    assert storage.local_path("k") == os.path.join(str(tmp_path), "k")
+
+
+def test_local_storage_local_path_missing_key_raises_not_found(tmp_path: Path) -> None:
+    storage = LocalStorage(str(tmp_path))
+    with pytest.raises(StorageKeyNotFoundError):
+        storage.local_path("nope")
 
 
 # --- get_storage() backend selection -----------------------------------------
@@ -151,6 +187,15 @@ def test_s3_storage_get_missing_key_raises_not_found(s3_bucket: str) -> None:
     with pytest.raises(StorageKeyNotFoundError) as exc_info:
         storage.get("nope")
     assert exc_info.value.key == "nope"
+
+
+def test_s3_storage_local_path_is_always_none(s3_bucket: str) -> None:
+    """S3 objects have no local filesystem representation — callers (the MP4
+    download route) must branch on this to fall back to signed_url() instead."""
+    storage: Storage = S3Storage(s3_bucket)
+    storage.put("present", b"data")
+    assert storage.local_path("present") is None
+    assert storage.local_path("missing") is None
 
 
 def test_s3_storage_url_is_an_s3_uri(s3_bucket: str) -> None:

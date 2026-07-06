@@ -12,6 +12,7 @@ map them to their own addressing (a local file path, an S3 object key).
 
 import os
 from abc import ABC, abstractmethod
+from functools import cache
 
 # backend/api/storage.py -> backend/
 _BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,6 +36,16 @@ class StorageKeyNotFoundError(StorageError):
 
     def __init__(self, key: str) -> None:
         super().__init__(f"no data stored at key {key!r}")
+        self.key = key
+
+
+class StorageInvalidKeyError(StorageError):
+    """`key` resolves outside the backend's storage root (e.g. via `../` path
+    segments) — refused rather than silently clamped, since a caller-controlled
+    key that escapes the root is always a bug or an attack, never legitimate."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__(f"key {key!r} resolves outside the storage root")
         self.key = key
 
 
@@ -64,6 +75,21 @@ class Storage(ABC):
     def signed_url(self, key: str, ttl_seconds: int) -> str:
         """A time-limited, directly-fetchable URL for `key` (CDN/S3 delivery)."""
 
+    @abstractmethod
+    def local_path(self, key: str) -> str | None:
+        """The on-disk path backing `key`, for backends that hold bytes as local
+        files — lets a caller stream large payloads directly (e.g. via
+        `starlette.responses.FileResponse`, which adds HTTP Range support for
+        free) instead of loading them fully into memory via `get()`.
+
+        Returns `None` for backends with no local filesystem representation
+        (e.g. S3): callers must fall back to `signed_url()` there instead of
+        proxying bytes through this process (architecture §12 — private
+        bucket, CDN/signed-URL delivery). Raises `StorageKeyNotFoundError` if
+        `key` is absent *and* that can be checked without a network round trip
+        (local only — `S3Storage.local_path` always returns `None` without
+        checking existence, callers proxy through `get()`/`signed_url()`)."""
+
 
 class LocalStorage(Storage):
     """Dev backend: binaries live under a root directory on local disk (`out/storage`
@@ -73,11 +99,18 @@ class LocalStorage(Storage):
     """
 
     def __init__(self, root: str) -> None:
-        self._root = root
-        os.makedirs(root, exist_ok=True)
+        self._root = os.path.normpath(root)
+        os.makedirs(self._root, exist_ok=True)
 
     def _path(self, key: str) -> str:
-        return os.path.join(self._root, *key.split("/"))
+        """Resolve `key` to a path under `_root`. `key` is meant to be a POSIX-style
+        relative path with no `..` segments, but nothing upstream enforces that —
+        normalize and check the result stays under `_root` rather than trust it, so
+        a key with `../` segments can't ever read/write outside the storage root."""
+        candidate = os.path.normpath(os.path.join(self._root, *key.split("/")))
+        if candidate != self._root and not candidate.startswith(self._root + os.sep):
+            raise StorageInvalidKeyError(key)
+        return candidate
 
     def put(self, key: str, data: bytes) -> None:
         path = self._path(key)
@@ -102,6 +135,12 @@ class LocalStorage(Storage):
         # No auth boundary to enforce locally; ttl is meaningless here but kept for
         # interface parity with S3Storage.
         return self.url(key)
+
+    def local_path(self, key: str) -> str:
+        path = self._path(key)
+        if not os.path.isfile(path):
+            raise StorageKeyNotFoundError(key)
+        return path
 
 
 class S3Storage(Storage):
@@ -164,18 +203,38 @@ class S3Storage(Storage):
         )
         return signed
 
+    def local_path(self, key: str) -> str | None:
+        # S3 objects have no local filesystem representation — callers must use
+        # signed_url()/get() instead; no existence check here (that's a network
+        # round trip callers should only pay for once, via get()/signed_url()).
+        return None
+
+
+@cache
+def _cached_local_storage(root: str) -> LocalStorage:
+    return LocalStorage(root)
+
+
+@cache
+def _cached_s3_storage(bucket: str, region_name: str | None, endpoint_url: str | None) -> S3Storage:
+    return S3Storage(bucket, region_name=region_name, endpoint_url=endpoint_url)
+
 
 def get_storage() -> Storage:
     """Build the Storage backend selected by `STORAGE_BACKEND` (default: `local`).
 
-    Not cached: construction is cheap for both backends (a `mkdir` for local, a boto3
-    client for S3), and re-reading the env each call keeps this easy to override in
-    tests without process-wide state to reset.
+    The env is still read on every call (cheap, and keeps this easy to override per
+    test via `monkeypatch`), but the backend instance itself is memoized per resolved
+    config (`functools.cache`, keyed on the actual root/bucket/region/endpoint values)
+    so a per-request call doesn't re-`mkdir` (local) or rebuild a boto3 client (S3)
+    every time. A different config (e.g. a test's own `STORAGE_LOCAL_ROOT` under
+    `tmp_path`) is simply a different cache key — no process-wide state to reset
+    between tests.
     """
     backend = os.environ.get("STORAGE_BACKEND", "local")
     if backend == "local":
         root = os.environ.get("STORAGE_LOCAL_ROOT", _DEFAULT_LOCAL_ROOT)
-        return LocalStorage(root)
+        return _cached_local_storage(root)
     if backend == "s3":
         try:
             bucket = os.environ["STORAGE_S3_BUCKET"]
@@ -183,9 +242,9 @@ def get_storage() -> Storage:
             raise StorageConfigError(
                 "STORAGE_BACKEND=s3 requires STORAGE_S3_BUCKET to be set."
             ) from exc
-        return S3Storage(
+        return _cached_s3_storage(
             bucket,
-            region_name=os.environ.get("STORAGE_S3_REGION"),
-            endpoint_url=os.environ.get("STORAGE_S3_ENDPOINT_URL"),  # e.g. moto/LocalStack in tests
+            os.environ.get("STORAGE_S3_REGION"),
+            os.environ.get("STORAGE_S3_ENDPOINT_URL"),  # e.g. moto/LocalStack in tests
         )
     raise StorageConfigError(f"unknown STORAGE_BACKEND={backend!r}; expected 'local' or 's3'")
