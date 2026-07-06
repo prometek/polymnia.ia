@@ -252,6 +252,14 @@ def download_video(video: Video) -> Response:
     filename = f"{video['id']}.mp4"
     try:
         path = storage.local_path(key)
+        # `local_path` returns None for backends with no filesystem representation
+        # (S3) without checking existence — verify here so a dangling key (recorded
+        # in the DB but never uploaded, or since deleted from the bucket) 404s the
+        # same way the local backend already does, instead of redirecting to a
+        # signed URL for an object that isn't there. One extra round trip
+        # (`head_object`), paid only on this branch — local dev never hits it.
+        if path is None and not storage.exists(key):
+            raise StorageKeyNotFoundError(key)
     except StorageKeyNotFoundError as exc:
         # Dangling `mp4_path` (recorded in the DB but absent from the backing store)
         # — surface the same 404 a caller would see for "never rendered".
