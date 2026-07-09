@@ -15,13 +15,19 @@ Authentication (issue #16): `get_current_user` resolves every request to a local
 user id — via a verified Clerk session token (`AUTH_MODE=clerk`, default) or a
 single configured dev identity (`AUTH_MODE=dev`, local `./run.sh`/uvicorn only). See
 `api/auth.py` for token verification.
+
+Rate limiting (issue #17): the three job-triggering endpoints (`POST /projects`,
+`.../render`, `.../scenes/{order}/ai-edit`) carry a `rate_limited(scope)`
+dependency — a per-user sliding-window quota shared via Redis (see
+`api/rate_limit.py`), so cost-bearing LLM/TTS/render calls stay bounded even
+behind several stateless API instances. Read (`GET`) endpoints are unaffected.
 """
 
 import glob
 import json
 import os
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Any
@@ -32,7 +38,7 @@ from pydantic import BaseModel
 from tasks import generation
 from tasks import render as render_jobs
 
-from . import auth, db, job_events, queue_metrics, service
+from . import auth, db, job_events, queue_metrics, rate_limit, service
 from .storage import StorageKeyNotFoundError, get_storage
 
 # How long a redirect to a CloudFront signed URL stays valid (issue #12/#14) — long
@@ -149,6 +155,24 @@ def get_current_user(request: Request) -> str:
 UserId = Annotated[str, Depends(get_current_user)]
 
 
+def rate_limited(scope: str) -> Callable[[UserId], None]:
+    """Dependency factory: wrap in `Depends(...)` and pass via a route's
+    `dependencies=[...]` (issue #17) for a per-user sliding-window rate limit,
+    shared across API instances via Redis (see `api/rate_limit.py`). `scope`
+    names the budget (isolates e.g. renders from project creation); over quota
+    -> `HTTPException(429)` with `Retry-After`.
+
+    Depends on `UserId`, already resolved once per request by the route's own
+    handler/other dependencies (FastAPI's per-request dependency cache) — no
+    extra Clerk verification round trip just to rate-limit.
+    """
+
+    def check(user_id: UserId) -> None:
+        rate_limit.enforce(scope, user_id)
+
+    return check
+
+
 def require_video(pid: str, user_id: UserId) -> dict[str, Any]:
     v = db.get_video(pid, user_id)
     if not v:  # unknown id OR owned by another user → same 404 (no existence leak)
@@ -216,7 +240,12 @@ def project(video: Video) -> dict[str, Any]:
     return video
 
 
-@app.post("/projects", status_code=202, response_model=JobStarted)
+@app.post(
+    "/projects",
+    status_code=202,
+    response_model=JobStarted,
+    dependencies=[Depends(rate_limited("projects:create"))],
+)
 def new_project(body: CreateProject, user_id: UserId) -> JobStarted:
     version_id = db.latest_version_id(body.brand_kit_id, user_id)
     if not version_id:
@@ -233,7 +262,11 @@ def new_project(body: CreateProject, user_id: UserId) -> JobStarted:
     return JobStarted(id=pid, status="generating", brand_kit_version_id=version_id)
 
 
-@app.post("/projects/{pid}/scenes/{order}/ai-edit", response_model=SceneEdited)
+@app.post(
+    "/projects/{pid}/scenes/{order}/ai-edit",
+    response_model=SceneEdited,
+    dependencies=[Depends(rate_limited("scenes:ai-edit"))],
+)
 def ai_edit(pid: str, order: int, body: AiEdit, video: Video, kit: Kit) -> SceneEdited:
     scene = service.edit_ai(pid, video["scenes"], order, body.instruction, kit)
     return SceneEdited(order=order, scene=scene)
@@ -245,7 +278,12 @@ def direct_edit(pid: str, order: int, body: DirectEdit, video: Video, kit: Kit) 
     return SceneEdited(order=order, scene=scene)
 
 
-@app.post("/projects/{pid}/render", status_code=202, response_model=JobStarted)
+@app.post(
+    "/projects/{pid}/render",
+    status_code=202,
+    response_model=JobStarted,
+    dependencies=[Depends(rate_limited("projects:render"))],
+)
 def render(pid: str, video: Video, kit: Kit) -> JobStarted:
     if not video["scenes"]:
         raise HTTPException(409, "project has no scenes yet")

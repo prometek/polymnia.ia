@@ -45,6 +45,13 @@ Two subprojects with separate toolchains under a single git repo at the root.
   `dev`: local `./run.sh`/uvicorn only — skips Clerk, resolves a single configured identity
   (`AUTH_DEV_EMAIL`, default `dev@polymnia.local`), and the lifespan seeds that user + the repo's
   `inputs/brand_kit*.json` kits (never done in `clerk` mode). See `backend/api/auth.py`.
+- Rate limiting (issue #17): per-user sliding-window quota on the job-triggering endpoints
+  (`POST /projects`, `.../render`, `.../scenes/{order}/ai-edit`) — over quota → `429` +
+  `Retry-After`. Shared counter in Redis (`REDIS_URL`, same broker as the job queue) so the
+  limit holds across stateless API instances; `GET` endpoints are unaffected.
+  `RATE_LIMIT_MAX_REQUESTS` (default `20`) per `RATE_LIMIT_WINDOW_S` (default `60`), applied
+  per endpoint scope (a render burst doesn't also block project creation). See
+  `backend/api/rate_limit.py`.
 
 **Render-motor (`render-motor/`)**
 - Install deps:        `npm install`
@@ -89,6 +96,9 @@ Two subprojects with separate toolchains under a single git repo at the root.
 > (`ruff check` + `ruff format --check`, `mypy` strict, `alembic upgrade` +
 > `alembic check`, `pytest`), render-motor TS (`tsc --noEmit`, Vitest), and a
 > render-image `docker build`. Deployment (dev/staging/prod) is not wired yet.
+> Since issue #17, the backend job also runs a `redis:7-alpine` service
+> (alongside `postgres`) — `pytest` now exercises the real rate-limit Redis
+> path on the job-triggering endpoints, not just a mock.
 
 ## How to validate a change end-to-end
 > Required before any change is handed back. Don't rely on unit tests alone.
