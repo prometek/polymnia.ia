@@ -88,13 +88,18 @@ def render_background(brand_kit: dict[str, Any]) -> dict[str, Any] | None:
     return out
 
 
+def primary_logo(brand_kit: dict[str, Any]) -> dict[str, Any] | None:
+    """The kit's primary logo asset (or the first logo if none is flagged primary)."""
+    logos = [a for a in brand_kit.get("assets", []) if a.get("type") == "logo"]
+    return next((a for a in logos if a.get("primary")), logos[0] if logos else None)
+
+
 def copy_logo(brand_kit: dict[str, Any]) -> str | None:
     """Copy the kit's primary logo into public/ and return its name (staticFile).
 
     Baked asset (ADR-11): the file is fixed, and so are its colors.
     """
-    logos = [a for a in brand_kit.get("assets", []) if a.get("type") == "logo"]
-    primary = next((a for a in logos if a.get("primary")), logos[0] if logos else None)
+    primary = primary_logo(brand_kit)
     if not primary or not primary.get("file"):
         return None
 
