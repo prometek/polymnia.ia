@@ -136,12 +136,12 @@ def get_current_user(request: Request) -> str:
     user, creating one on first login. `AUTH_MODE=dev`: resolves the single
     configured dev identity instead — local `./run.sh`/uvicorn only, never a
     fallback taken from within `clerk` mode (a missing/invalid token there is
-    always a 401, never silently treated as "use the dev user").
+    always a 401, never silently treated as "use the dev user"). `AUTH_MODE`
+    itself is validated once at import (`api/auth.py`), not per-request here — an
+    unknown value fails the process at boot, not on the first inbound request.
     """
     if auth.AUTH_MODE == "dev":
         return db.ensure_user(auth.DEV_EMAIL)
-    if auth.AUTH_MODE != "clerk":
-        raise HTTPException(500, f"unknown AUTH_MODE={auth.AUTH_MODE!r}; expected 'clerk' or 'dev'")
     identity = auth.verify_clerk_request(request)
     return db.get_or_create_user_by_clerk_id(identity.clerk_user_id, identity.email)
 

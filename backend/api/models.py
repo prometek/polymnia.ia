@@ -53,15 +53,16 @@ class User(SQLModel, table=True):
     since a Clerk user's email can change. `email` is kept for display/dev-mode
     (`db.ensure_user`, `AUTH_MODE=dev`) but is nullable: a Clerk identity's session
     token isn't guaranteed to carry an `email` claim depending on Clerk instance
-    config. Both are unique but optional — a row is expected to have at least one
-    of them set, enforced at the call sites (`ensure_user`/`get_or_create_user_by_clerk_id`),
-    not a DB constraint (either can legitimately be absent depending on auth mode).
+    config. `email` deliberately has NO uniqueness constraint (issue #16 code
+    review): it's no longer the identity key, so a dev-mode user and a Clerk login
+    legitimately sharing an email (e.g. a dev->prod transition) must not collide —
+    only `clerk_user_id` is unique.
     """
 
     __tablename__ = "users"
 
     id: uuid.UUID | None = _uuid_pk()
-    email: str | None = Field(default=None, sa_column=Column(Text, unique=True))
+    email: str | None = Field(default=None, sa_column=Column(Text))
     clerk_user_id: str | None = Field(default=None, sa_column=Column(Text, unique=True))
     created_at: datetime | None = _created_at()
 

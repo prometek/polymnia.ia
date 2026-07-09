@@ -31,10 +31,17 @@ def upgrade() -> None:
                existing_type=sa.TEXT(),
                nullable=True)
     op.create_unique_constraint('users_clerk_user_id_key', 'users', ['clerk_user_id'])
+    # `email` is no longer the auth identity key (`clerk_user_id`/`sub` is) — a Clerk
+    # login and a pre-existing dev-mode user can legitimately share an email (e.g. a
+    # dev->prod transition) without being the same account. Keeping this constraint
+    # turned that collision into an uncaught IntegrityError (500) at login time
+    # (issue #16 code review, `db.get_or_create_user_by_clerk_id`).
+    op.drop_constraint('users_email_key', 'users', type_='unique')
 
 
 def downgrade() -> None:
     """Downgrade schema."""
+    op.create_unique_constraint('users_email_key', 'users', ['email'])
     op.drop_constraint('users_clerk_user_id_key', 'users', type_='unique')
     op.alter_column('users', 'email',
                existing_type=sa.TEXT(),
