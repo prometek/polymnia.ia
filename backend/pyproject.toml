@@ -7,6 +7,7 @@ requires-python = ">=3.14"
 dependencies = [
     "alembic>=1.14.0",
     "celery[redis]>=5.4.0",
+    "clerk-backend-api>=6.0.1",
     "dotenv>=0.9.9",
     "fastapi>=0.138.2",
     "psycopg[binary]>=3.3.4",

@@ -11,8 +11,10 @@ logic) -> service.py (pipeline orchestration + persistence) -> db.py (SQL).
 Endpoints are sync `def` on purpose: psycopg 3 is sync I/O, so FastAPI runs them in
 its threadpool. Do not mix async I/O into these handlers.
 
-Single-tenant for now: all data belongs to a default dev user (schema is multi-tenant
-ready; auth wiring comes later).
+Authentication (issue #16): `get_current_user` resolves every request to a local
+user id — via a verified Clerk session token (`AUTH_MODE=clerk`, default) or a
+single configured dev identity (`AUTH_MODE=dev`, local `./run.sh`/uvicorn only). See
+`api/auth.py` for token verification.
 """
 
 import glob
@@ -30,10 +32,8 @@ from pydantic import BaseModel
 from tasks import generation
 from tasks import render as render_jobs
 
-from . import db, job_events, queue_metrics, service
+from . import auth, db, job_events, queue_metrics, service
 from .storage import StorageKeyNotFoundError, get_storage
-
-DEV_EMAIL = "dev@polymnia.local"
 
 # How long a redirect to a CloudFront signed URL stays valid (issue #12/#14) — long
 # enough for a client to start streaming the video, short enough that a leaked link
@@ -45,10 +45,14 @@ VIDEO_SIGNED_URL_TTL_S = int(os.environ.get("STORAGE_CLOUDFRONT_SIGNED_URL_TTL_S
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     db.init_db()
-    app.state.user_id = db.ensure_user(DEV_EMAIL)
-    for path in glob.glob(os.path.join(service.BACKEND, "inputs", "brand_kit*.json")):
-        with open(path, encoding="utf-8") as f:
-            db.upsert_brand_kit(json.load(f), app.state.user_id)
+    # Dev-only seeding (issue #16): the old unconditional DEV_EMAIL seed is now
+    # gated behind AUTH_MODE=dev — a `clerk`-mode (prod) boot never creates or
+    # depends on this local identity, and brand kits ship with real users instead.
+    if auth.AUTH_MODE == "dev":
+        dev_user_id = db.ensure_user(auth.DEV_EMAIL)
+        for path in glob.glob(os.path.join(service.BACKEND, "inputs", "brand_kit*.json")):
+            with open(path, encoding="utf-8") as f:
+                db.upsert_brand_kit(json.load(f), dev_user_id)
     yield
 
 
@@ -120,12 +124,29 @@ class JobStatus(BaseModel):
 # --- Dependencies ----------------------------------------------------------
 
 
-def get_user_id(request: Request) -> str:
-    user_id: str = request.app.state.user_id
-    return user_id
+def get_current_user(request: Request) -> str:
+    """Resolve the authenticated caller for this request -> local `users.id`
+    (issue #16). This is the app's single user seam: every route depends on it
+    (directly or via `UserId`), and tests override this exact dependency (see
+    `tests/conftest.py`'s `as_user` fixture) to act as a chosen user without a
+    live Clerk instance.
+
+    `AUTH_MODE=clerk` (default): verifies the request's bearer/session token via
+    the Clerk SDK (`api/auth.py`) and maps the stable Clerk identity to a local
+    user, creating one on first login. `AUTH_MODE=dev`: resolves the single
+    configured dev identity instead — local `./run.sh`/uvicorn only, never a
+    fallback taken from within `clerk` mode (a missing/invalid token there is
+    always a 401, never silently treated as "use the dev user").
+    """
+    if auth.AUTH_MODE == "dev":
+        return db.ensure_user(auth.DEV_EMAIL)
+    if auth.AUTH_MODE != "clerk":
+        raise HTTPException(500, f"unknown AUTH_MODE={auth.AUTH_MODE!r}; expected 'clerk' or 'dev'")
+    identity = auth.verify_clerk_request(request)
+    return db.get_or_create_user_by_clerk_id(identity.clerk_user_id, identity.email)
 
 
-UserId = Annotated[str, Depends(get_user_id)]
+UserId = Annotated[str, Depends(get_current_user)]
 
 
 def require_video(pid: str, user_id: UserId) -> dict[str, Any]:

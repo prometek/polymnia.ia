@@ -38,6 +38,13 @@ Two subprojects with separate toolchains under a single git repo at the root.
 - Storage backend (issue #12): `STORAGE_BACKEND=local|s3` (default `local`, under `backend/out/storage/` or `STORAGE_LOCAL_ROOT`).
   For `s3`: `STORAGE_S3_BUCKET` (required), `STORAGE_S3_REGION`, `STORAGE_S3_ENDPOINT_URL` (e.g. moto/LocalStack for tests).
   Video downloads (`GET /projects/{id}/video`) are 302-redirected to a CloudFront signed URL on `s3` (issue #14) — requires `STORAGE_CLOUDFRONT_DOMAIN`, `STORAGE_CLOUDFRONT_KEY_PAIR_ID`, `STORAGE_CLOUDFRONT_PRIVATE_KEY_PATH` (RSA private key, PEM); optional `STORAGE_CLOUDFRONT_SIGNED_URL_TTL_S` (default 300). Missing/invalid config raises `StorageConfigError`. See `backend/api/storage.py`.
+- Auth (issue #16): `AUTH_MODE=clerk|dev` (default `clerk`). `clerk`: every request needs a valid
+  Clerk session token (`Authorization: Bearer <token>`), verified via the `clerk-backend-api` SDK —
+  requires `CLERK_SECRET_KEY` (missing → `AuthConfigError`, not a silent fallback to `dev`); optional
+  `CLERK_JWT_KEY` (PEM) for networkless verification, else the SDK fetches/caches Clerk's JWKS.
+  `dev`: local `./run.sh`/uvicorn only — skips Clerk, resolves a single configured identity
+  (`AUTH_DEV_EMAIL`, default `dev@polymnia.local`), and the lifespan seeds that user + the repo's
+  `inputs/brand_kit*.json` kits (never done in `clerk` mode). See `backend/api/auth.py`.
 
 **Render-motor (`render-motor/`)**
 - Install deps:        `npm install`

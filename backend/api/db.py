@@ -22,6 +22,7 @@ __all__ = [
     "create_video",
     "ensure_user",
     "get_job",
+    "get_or_create_user_by_clerk_id",
     "get_scenes",
     "get_video",
     "init_db",
@@ -47,6 +48,10 @@ _ASSET_COLS = ("id", "type", "emoji", "glyph", "file", "usage", "primary")
 
 
 def ensure_user(email: str) -> str:
+    """Dev-mode / seeding path (AUTH_MODE=dev, see api/main.py): get-or-create a user
+    by email, with no Clerk identity attached. Kept separate from
+    `get_or_create_user_by_clerk_id` below — the two are looked up by different
+    keys and must never be conflated (a dev user has no `clerk_user_id`)."""
     with Session(engine) as s:
         user = s.exec(select(User).where(User.email == email)).one_or_none()
         if user is None:
@@ -54,6 +59,28 @@ def ensure_user(email: str) -> str:
             s.add(user)
             s.commit()
             s.refresh(user)
+        return str(user.id)
+
+
+def get_or_create_user_by_clerk_id(clerk_user_id: str, email: str | None) -> str:
+    """Map a verified Clerk identity (issue #16) to a local user, creating one on
+    first login. Keyed on `clerk_user_id` (the stable `sub` claim) — never looked up
+    by email, since a Clerk user can change their email without that affecting which
+    local user/resources they own. `email` is stored for display only when present;
+    kept in sync on subsequent logins if it changed on the Clerk side.
+    """
+    with Session(engine) as s:
+        user = s.exec(select(User).where(User.clerk_user_id == clerk_user_id)).one_or_none()
+        if user is None:
+            user = User(clerk_user_id=clerk_user_id, email=email)
+            s.add(user)
+            s.commit()
+            s.refresh(user)
+            return str(user.id)
+        if email is not None and user.email != email:
+            user.email = email
+            s.add(user)
+            s.commit()
         return str(user.id)
 
 
