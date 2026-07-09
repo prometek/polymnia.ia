@@ -23,8 +23,13 @@ landing on different API instances.
 `scope` isolates the three endpoints from each other (a burst of renders doesn't
 also block cheaper project creation) — all scopes share the same configured
 quota (`RATE_LIMIT_MAX_REQUESTS` per `RATE_LIMIT_WINDOW_S`).
+
+Fail-closed on a Redis outage: `enforce()` turns a connection/timeout error into
+`HTTPException(503)` rather than letting requests through unbounded (see its
+docstring for the reasoning) — a deliberate choice, not an accidental error path.
 """
 
+import logging
 import os
 import uuid
 from dataclasses import dataclass
@@ -34,6 +39,8 @@ from fastapi import HTTPException
 
 from .redis_config import REDIS_URL
 
+logger = logging.getLogger(__name__)
+
 
 class RateLimitConfigError(Exception):
     """`RATE_LIMIT_MAX_REQUESTS`/`RATE_LIMIT_WINDOW_S` env config is invalid.
@@ -42,6 +49,21 @@ class RateLimitConfigError(Exception):
     `StorageConfigError`: fail at import (config boundary), not on the first
     request.
     """
+
+
+class RateLimitBackendUnavailable(Exception):
+    """Redis (the counter's backing store) was unreachable or timed out for this
+    admission check. Distinct from `RateLimitConfigError`: this is a transient
+    runtime failure, not a deploy misconfiguration. `enforce()` is the only
+    place this is caught — it's a deliberate fail-**closed** choice (see its
+    docstring), not an accidental error path."""
+
+
+# `Retry-After` sent on the fail-closed 503 (backend unavailable) — a short,
+# fixed hint distinct from the 429 path's computed window-based delay: there's
+# no sliding-window state to reason about when Redis itself is unreachable, just
+# "the outage is presumably brief, try again shortly".
+RATE_LIMIT_BACKEND_RETRY_AFTER_S = 1
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -127,27 +149,57 @@ class RateLimitResult:
 def check_rate_limit(scope: str, user_id: str) -> RateLimitResult:
     """Consume (or reject) one request against `(scope, user_id)`'s sliding-window
     budget. Pure Redis I/O, no HTTP concern — kept separate from `enforce` so the
-    admission logic is testable without a FastAPI request/response cycle."""
+    admission logic is testable without a FastAPI request/response cycle.
+
+    Raises `RateLimitBackendUnavailable` if Redis itself can't be reached/times
+    out — a distinct outcome from "allowed"/"rejected", left for the caller
+    (`enforce`) to translate into an HTTP response rather than silently treated
+    as either admission outcome here.
+    """
     key = f"ratelimit:{scope}:{user_id}"
     window_ms = RATE_LIMIT_WINDOW_S * 1000
     # A unique member per call: two requests landing in the same millisecond must
     # still count as two entries in the ZSET, not collapse into one.
-    member = f"{uuid.uuid4().hex}"
-    allowed_raw, retry_after_ms = _admission_script()(
-        keys=[key], args=[window_ms, RATE_LIMIT_MAX_REQUESTS, member]
-    )
+    member = uuid.uuid4().hex
+    try:
+        allowed_raw, retry_after_ms = _admission_script()(
+            keys=[key], args=[window_ms, RATE_LIMIT_MAX_REQUESTS, member]
+        )
+    except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError) as exc:
+        logger.warning("rate limit backend unavailable (scope=%s): %s", scope, exc)
+        raise RateLimitBackendUnavailable(
+            f"Redis unreachable while checking rate limit for scope={scope!r}"
+        ) from exc
     if allowed_raw:
         return RateLimitResult(allowed=True, retry_after_s=0)
-    # Ceil so a client never retries a moment too early because of truncation.
-    retry_after_s = (int(retry_after_ms) + 999) // 1000
+    # Ceil so a client never retries a moment too early because of truncation,
+    # then clamp to at least 1s: right at the window boundary the computed delay
+    # can legitimately round to 0, and "retry immediately" is a useless signal.
+    retry_after_s = max(1, (int(retry_after_ms) + 999) // 1000)
     return RateLimitResult(allowed=False, retry_after_s=retry_after_s)
 
 
 def enforce(scope: str, user_id: str) -> None:
     """Raise `HTTPException(429)` with a `Retry-After` header if `user_id` is over
     quota for `scope`; no-op otherwise. The single call site FastAPI route
-    dependencies use (see `api/main.py`'s `rate_limited`)."""
-    result = check_rate_limit(scope, user_id)
+    dependencies use (see `api/main.py`'s `rate_limited`).
+
+    Fail-**closed** on a Redis outage (`RateLimitBackendUnavailable` ->
+    `HTTPException(503)`), by deliberate choice: this limiter exists to bound
+    paid LLM/TTS/render cost abuse (architecture.md §15/§18), so admitting every
+    request unbounded the moment the shared counter can't be reached would defeat
+    the feature at exactly the moment it matters most. A `503` (not a `500`)
+    signals transient infrastructure trouble rather than a bug in the request,
+    and still carries `Retry-After` so a well-behaved client backs off.
+    """
+    try:
+        result = check_rate_limit(scope, user_id)
+    except RateLimitBackendUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="rate limiting is temporarily unavailable, try again shortly",
+            headers={"Retry-After": str(RATE_LIMIT_BACKEND_RETRY_AFTER_S)},
+        ) from exc
     if not result.allowed:
         raise HTTPException(
             status_code=429,

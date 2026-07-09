@@ -11,21 +11,28 @@ Acceptance criteria under test (from the issue, not the implementation):
   7. At least one end-to-end test drives a real endpoint through the FastAPI app
      (TestClient) and asserts the 429 + Retry-After behavior.
 
+Each test uses a fresh, unique `user_id` (and therefore a fresh Redis ZSET key
+`ratelimit:{scope}:{user_id}`), so tests shouldn't collide with each other in
+practice. Redis itself is real here (not mocked, unlike `queue_metrics`/
+`job_events` elsewhere in this suite) and — unlike the Postgres tables
+`conftest.py` truncates before every test — nothing else resets it between
+runs. `_flush_rate_limit_keys` below is a deterministic belt-and-suspenders
+guard on top of the uniqueness discipline: it wipes every `ratelimit:*` key
+before each test in this module, so a future test here that reuses a scope/id,
+or a prior interrupted run that left keys behind, can't leak state across
+tests.
+
 Requires a reachable Redis (`REDIS_URL`) - same as `api/rate_limit.py` itself;
 CI provisions one as a service container (see `.github/workflows/ci.yml`).
 `RATE_LIMIT_MAX_REQUESTS`/`RATE_LIMIT_WINDOW_S` are read once at import time
 into module-level constants (see `api/rate_limit.py`), so tests that need a
 different quota monkeypatch those constants directly rather than the env var
 (setting `os.environ` after import would have no effect).
-
-Each test uses a fresh, unique `user_id` (and therefore a fresh Redis ZSET key
-`ratelimit:{scope}:{user_id}`) so tests never need to flush Redis between runs
-to stay isolated from each other.
 """
 
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
@@ -34,6 +41,18 @@ from fastapi import HTTPException
 from starlette.testclient import TestClient
 from tasks import generation
 from tasks import render as render_jobs
+
+
+@pytest.fixture(autouse=True)
+def _flush_rate_limit_keys() -> Iterator[None]:
+    """Delete every `ratelimit:*` key before each test in this module (see the
+    module docstring for why this exists on top of the unique-`user_id`
+    discipline every test already follows)."""
+    client = rate_limit._redis_client()
+    keys = client.keys("ratelimit:*")
+    if keys:
+        client.delete(*keys)
+    yield
 
 
 def _unique_email() -> str:
