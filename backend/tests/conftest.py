@@ -49,7 +49,7 @@ os.environ["POLYMNIA_DEV_CREATE_ALL"] = "1"
 # Import only after DATABASE_URL points at the test DB (engine is import-time).
 import pytest  # noqa: E402
 from api import db  # noqa: E402
-from api.main import app, get_user_id  # noqa: E402
+from api.main import app, get_current_user  # noqa: E402
 from api.session import engine  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
@@ -84,13 +84,15 @@ def _isolated_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def as_user() -> Iterator[object]:
-    """Override the current-user dependency so a test can act as a chosen user_id."""
+    """Override the current-user dependency (issue #16: `get_current_user`, the
+    app's single user seam) so a test can act as a chosen user_id without a live
+    Clerk instance."""
 
     def _set(user_id: str) -> None:
-        app.dependency_overrides[get_user_id] = lambda: user_id
+        app.dependency_overrides[get_current_user] = lambda: user_id
 
     yield _set
-    app.dependency_overrides.pop(get_user_id, None)
+    app.dependency_overrides.pop(get_current_user, None)
 
 
 @pytest.fixture

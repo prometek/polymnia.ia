@@ -47,10 +47,23 @@ def _created_at() -> Any:
 
 
 class User(SQLModel, table=True):
+    """`clerk_user_id` (the Clerk `sub` claim, issue #16) is the stable identity key
+    used to map a verified Clerk session to a local user — resolved once at first
+    login (`db.get_or_create_user_by_clerk_id`) and never looked up by email again,
+    since a Clerk user's email can change. `email` is kept for display/dev-mode
+    (`db.ensure_user`, `AUTH_MODE=dev`) but is nullable: a Clerk identity's session
+    token isn't guaranteed to carry an `email` claim depending on Clerk instance
+    config. `email` deliberately has NO uniqueness constraint (issue #16 code
+    review): it's no longer the identity key, so a dev-mode user and a Clerk login
+    legitimately sharing an email (e.g. a dev->prod transition) must not collide —
+    only `clerk_user_id` is unique.
+    """
+
     __tablename__ = "users"
 
     id: uuid.UUID | None = _uuid_pk()
-    email: str = Field(sa_column=Column(Text, unique=True, nullable=False))
+    email: str | None = Field(default=None, sa_column=Column(Text))
+    clerk_user_id: str | None = Field(default=None, sa_column=Column(Text, unique=True))
     created_at: datetime | None = _created_at()
 
 

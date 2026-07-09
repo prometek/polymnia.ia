@@ -10,6 +10,8 @@ is dict-based, so we convert ORM rows → dicts at this boundary.
 import uuid
 from typing import Any
 
+from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, col, select
 
 from . import job_events
@@ -22,6 +24,7 @@ __all__ = [
     "create_video",
     "ensure_user",
     "get_job",
+    "get_or_create_user_by_clerk_id",
     "get_scenes",
     "get_video",
     "init_db",
@@ -47,14 +50,54 @@ _ASSET_COLS = ("id", "type", "emoji", "glyph", "file", "usage", "primary")
 
 
 def ensure_user(email: str) -> str:
+    """Dev-mode / seeding path (AUTH_MODE=dev, see api/main.py): get-or-create a user
+    by email, with no Clerk identity attached. Kept separate from
+    `get_or_create_user_by_clerk_id` below — the two are looked up by different
+    keys and must never be conflated (a dev user has no `clerk_user_id`).
+
+    `email` has no DB-level uniqueness constraint (issue #16 code review — see
+    `User`'s docstring): a Clerk-created row can legitimately share an email with a
+    dev-mode one. `.first()` rather than `.one_or_none()` tolerates that without
+    crashing; dev mode only ever needs *a* stable id for the configured identity,
+    not a guarantee that no other row happens to share its email.
+    """
     with Session(engine) as s:
-        user = s.exec(select(User).where(User.email == email)).one_or_none()
+        user = s.exec(select(User).where(User.email == email)).first()
         if user is None:
             user = User(email=email)
             s.add(user)
             s.commit()
             s.refresh(user)
         return str(user.id)
+
+
+def get_or_create_user_by_clerk_id(clerk_user_id: str, email: str | None) -> str:
+    """Map a verified Clerk identity (issue #16) to a local user, creating one on
+    first login. Keyed on `clerk_user_id` (the stable `sub` claim) — never looked up
+    by email, since a Clerk user can change their email (or share one with an
+    unrelated account, e.g. a dev-mode user — `email` has no uniqueness constraint,
+    see `User`'s docstring) without that affecting which local user/resources they
+    own.
+
+    Implemented as a single atomic `INSERT ... ON CONFLICT (clerk_user_id) DO
+    UPDATE` (Postgres upsert), not a SELECT-then-INSERT: a SPA can fire several
+    requests right after sign-in, and two concurrent first-logins for the same
+    `sub` would otherwise both read "no row" and race to INSERT — the loser hitting
+    an uncaught `IntegrityError` on the unique `clerk_user_id` constraint instead of
+    resolving to the same user (issue #16 code review). The conflict branch only
+    overwrites `email` when a new one was actually provided
+    (`COALESCE(excluded.email, users.email)`): a later login whose token carries no
+    `email` claim must not blank out a previously-stored one.
+    """
+    with Session(engine) as s:
+        insert_stmt = pg_insert(User).values(clerk_user_id=clerk_user_id, email=email)
+        upsert_stmt = insert_stmt.on_conflict_do_update(
+            index_elements=[col(User.clerk_user_id)],
+            set_={"email": func.coalesce(insert_stmt.excluded.email, col(User.email))},
+        ).returning(col(User.id))
+        user_id = s.execute(upsert_stmt).scalar_one()
+        s.commit()
+        return str(user_id)
 
 
 # --- Brand kits + versions -------------------------------------------------
