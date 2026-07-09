@@ -168,6 +168,7 @@ def brand_kits(user_id: UserId) -> list[dict[str, Any]]:
 def create_brand_kit(kit: dict[str, Any], user_id: UserId) -> BrandKitCreated:
     if "id" not in kit:
         raise HTTPException(400, "brand kit needs an 'id'")
+    service.bake_kit_assets(kit)  # logo/background → Storage keys (issue #15)
     version_id = db.upsert_brand_kit(kit, user_id)
     return BrandKitCreated(id=kit["id"], version_id=version_id)
 

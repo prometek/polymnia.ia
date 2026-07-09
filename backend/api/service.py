@@ -6,6 +6,7 @@ Reuses pipeline/* (generate_plan, outline, fill, tts, pack_render). Each project
 its own audio dir and its own render-input + MP4, so projects don't collide.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -47,6 +48,105 @@ def _audio_key(pid: str, order: int) -> str:
 
 def _video_key(pid: str) -> str:
     return f"projects/{pid}/render.mp4"
+
+
+# --- Brand kit assets: bake to Storage (issue #15) -------------------------
+
+
+def _asset_key(kit_id: str, file: str, data: bytes) -> str:
+    """Storage key for a baked kit asset (logo/background image).
+
+    Content-addressed under the brand kit (`sha256` of the bytes): the same file
+    re-posted always maps to the same key. That stability is what keeps
+    `db.upsert_brand_kit`'s "new version only if changed" idempotency intact — the
+    baked `file` value has to be reproducible from the input, so a key can't embed
+    the (not-yet-assigned) `brand_kit_version_id`. Version scoping still holds at the
+    DB level: each `Asset` row is FK-scoped to its `brand_kit_version_id` (ADR-06).
+    """
+    ext = os.path.splitext(file)[1]
+    digest = hashlib.sha256(data).hexdigest()[:16]
+    return f"brand-kits/{kit_id}/assets/{digest}{ext}"
+
+
+def _bake_asset_file(storage: Any, kit_id: str, obj: dict[str, Any]) -> None:
+    """Promote one asset's `file` (logo asset or `cosmetic.background`) into Storage,
+    rewriting it in place to the resulting key. No-op if the object has no `file`.
+
+    A local path pointing at an existing file is baked; a value that is already a
+    stored key is left as-is (re-posting a kit whose assets are already in Storage).
+    Anything else fails loudly — a `file` that resolves neither on local disk nor in
+    Storage is a bad kit, never something to silently render without.
+    """
+    file = obj.get("file")
+    if not file:
+        return
+    local = os.path.join(BACKEND, file)
+    if os.path.isfile(local):
+        with open(local, "rb") as f:
+            data = f.read()
+        key = _asset_key(kit_id, file, data)
+        storage.put(key, data)
+        obj["file"] = key
+    elif storage.exists(file):
+        return
+    else:
+        raise FileNotFoundError(f"kit asset file not found on local disk or in Storage: {file!r}")
+
+
+def bake_kit_assets(kit: dict[str, Any]) -> None:
+    """Bake a kit's baked assets (logos + image background) into Storage, mutating the
+    kit so each `file` becomes a Storage key (issue #15). Call before persisting the
+    kit: the render worker resolves those keys from Storage instead of copying local
+    files into `render-motor/public/` at pack time.
+    """
+    storage = get_storage()
+    kit_id = kit["id"]
+    for asset in kit.get("assets", []):
+        _bake_asset_file(storage, kit_id, asset)
+    bg = kit.get("cosmetic", {}).get("background")
+    if bg and bg.get("type") == "image":
+        _bake_asset_file(storage, kit_id, bg)
+
+
+def _materialize_kit_asset(storage: Any, key: str, pub: str, pid: str) -> str:
+    """Download a baked kit asset (Storage key) into the project's render sandbox and
+    return its `staticFile()`-relative path. Mirrors how scene audio is materialized —
+    project-scoped under `proj-{pid}/`, so it's wiped with the rest of the render
+    scratch (issue #13) and never leaks into `public/` root across renders.
+    """
+    name = os.path.basename(key)
+    with open(os.path.join(pub, name), "wb") as f:
+        f.write(storage.get(key))
+    return f"proj-{pid}/{name}"
+
+
+def _resolve_logo(kit: Kit, storage: Any, pub: str, pid: str) -> str | None:
+    """Materialize the kit's primary logo from Storage for the render, or None."""
+    from pack_render import primary_logo
+
+    primary = primary_logo(kit)
+    if not primary or not primary.get("file"):
+        return None
+    return _materialize_kit_asset(storage, primary["file"], pub, pid)
+
+
+def _resolve_background(kit: Kit, storage: Any, pub: str, pid: str) -> dict[str, Any] | None:
+    """Build the render's background override, materializing an image background from
+    Storage. Non-image backgrounds (gradient/solid/theme) carry no baked file.
+    """
+    bg = kit.get("cosmetic", {}).get("background")
+    if not bg:
+        return None
+    out: dict[str, Any] = {
+        "type": bg.get("type", "theme"),
+        "overlayDecor": bg.get("overlayDecor", False),
+    }
+    if bg.get("type") == "image":
+        key = bg.get("file")
+        if not key:
+            raise ValueError("image background has no 'file' to resolve")
+        out["value"] = _materialize_kit_asset(storage, key, pub, pid)
+    return out
 
 
 def _total(scenes: list[Scene]) -> float:
@@ -204,9 +304,7 @@ def render_project(pid: str, scenes: list[Scene], kit: Kit, job_id: str) -> str:
     from pack_render import (
         PUBLIC,
         RENDER_DIR,
-        copy_logo,
         emoji_map,
-        render_background,
         render_cosmetic,
         resolve_content,
     )
@@ -240,11 +338,14 @@ def render_project(pid: str, scenes: list[Scene], kit: Kit, job_id: str) -> str:
             )
 
         cosmetic = render_cosmetic(kit)
-        cosmetic["background"] = render_background(kit)
+        # Kit assets (logo + image background) are baked into Storage at kit creation
+        # (issue #15); resolve them from there into the project sandbox, not from a
+        # local copy in public/.
+        cosmetic["background"] = _resolve_background(kit, storage, pub, pid)
         render_input = {
             "styleId": kit.get("visualStyle", "tech"),
             "cosmetic": cosmetic,
-            "logo": copy_logo(kit),
+            "logo": _resolve_logo(kit, storage, pub, pid),
             "scenes": out_scenes,
         }
         with open(props_path, "w", encoding="utf-8") as f:
