@@ -401,10 +401,9 @@ def test_dev_user_and_clerk_user_with_same_email_do_not_silently_merge(
     `db.get_or_create_user_by_clerk_id`'s docstring). A dev user and a Clerk login
     sharing the same email is a realistic edge case (e.g. dev->prod transition) —
     exercised here to confirm the app doesn't silently merge two different
-    people's accounts just because their email matches. `users.email` also has a
-    DB-level uniqueness constraint (`api/models.py`'s `User.email`), so this may
-    surface as a raised `IntegrityError` rather than a merge; either way it must
-    not silently attribute one user's resources to the other's local account.
+    people's accounts just because their email matches. `users.email` is not unique
+    (identity is keyed on `clerk_user_id`), so the two coexist as distinct rows and
+    the app must not attribute one user's resources to the other's local account.
     """
     shared_email = "shared@example.com"
     dev_uid = db.ensure_user(shared_email)

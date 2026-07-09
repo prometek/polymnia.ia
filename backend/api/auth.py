@@ -23,13 +23,23 @@ from clerk_backend_api import Clerk
 from clerk_backend_api.security.types import AuthenticateRequestOptions, Requestish, TokenType
 from fastapi import HTTPException
 
+
+class AuthConfigError(Exception):
+    """Auth configuration is invalid (unknown `AUTH_MODE`, or `CLERK_SECRET_KEY`
+    missing while `AUTH_MODE=clerk`).
+
+    Mirrors `api/storage.py`'s `StorageConfigError`: a clear, typed error raised at
+    the config boundary / point of use, not a silent fallback to another mode.
+    """
+
+
 _VALID_AUTH_MODES = frozenset({"clerk", "dev"})
 
 AUTH_MODE = os.environ.get("AUTH_MODE", "clerk")  # clerk | dev
 if AUTH_MODE not in _VALID_AUTH_MODES:
     # Fail at import (config boundary), not on the first request — an unknown mode
     # is a deploy misconfiguration, never something to silently coerce to "clerk".
-    raise RuntimeError(f"unknown AUTH_MODE={AUTH_MODE!r}; expected 'clerk' or 'dev'")
+    raise AuthConfigError(f"unknown AUTH_MODE={AUTH_MODE!r}; expected 'clerk' or 'dev'")
 
 # AUTH_MODE=dev only: the single local identity every request resolves to (mirrors
 # the old unconditional DEV_EMAIL seed, now opt-in — issue #16).
@@ -50,14 +60,6 @@ CLERK_AUTHORIZED_PARTIES = (
     if _authorized_parties_raw
     else None
 )
-
-
-class AuthConfigError(Exception):
-    """Required Clerk config (`CLERK_SECRET_KEY`) is missing while `AUTH_MODE=clerk`.
-
-    Mirrors `api/storage.py`'s `StorageConfigError`: a clear, typed error raised at
-    the point of use, not a silent fallback to another mode.
-    """
 
 
 @dataclass(frozen=True)
